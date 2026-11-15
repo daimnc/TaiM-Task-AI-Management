@@ -4,6 +4,10 @@
 .env.*
 !.env.example
 
+# Firebase service account credentials
+**/serviceAccount*.json
+**/*service-account*.json
+
 # Python
 .venv/
 venv/
