@@ -4,7 +4,7 @@ Dependency-free ES-module app (vanilla JS + CSS, hash routing). No build step.
 
 Run from the project root:
 
-    python -m http.server 5500
+    python -m http.server 5500 --directory frontend
 
 Open http://localhost:5500
 
