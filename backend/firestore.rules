@@ -1,0 +1,11 @@
+rules_version = '2';
+
+// TAiM reads and writes Firestore ONLY through the Flask backend (Firebase Admin SDK, which bypasses these rules).
+// The browser never talks to Firestore, so deny all direct client access.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
