@@ -10,11 +10,14 @@ const setNav = o => { const sb = document.getElementById('sb'); if (!sb) return;
 addEventListener('keydown', e => { if (e.key === 'Escape') setNav(false) });
 matchMedia('(min-width:861px)').addEventListener('change', e => { if (e.matches) setNav(false) });
 let cleanup = null;
+// Redirects made by the route guard and the auth listener. Real mode replaces the current history entry, so Back can never return to a
+// protected URL that would just bounce again (a redirect loop). Mock mode keeps its original behavior (plain hash assignment).
+const redirect = h => { if (CONFIG.USE_MOCK) location.hash = h; else location.replace(h) };
 function route() {
     cleanup?.(); cleanup = null; document.body.classList.remove('lock');
     const [path, qs = ''] = location.hash.replace(/^#\/?/, '').split('?'), page = Object.hasOwn(pages, path) && pages[path], q = new URLSearchParams(qs);
     if (!page) { location.hash = '#/'; return }
-    if (!page.public && !auth.token) { location.hash = '#/login'; return }
+    if (!page.public && !auth.token) { redirect('#/login'); return }
     document.title = `${page.title} · TAiM`; window.scrollTo(0, 0);
     if (page.public) { app.innerHTML = ''; const r = page.render(app, q); if (typeof r === 'function') cleanup = r; return }
     app.innerHTML = `<div class="shell"><div class="scrim" id="scrim"></div><aside class="sidebar" id="sb" aria-label="Sidebar"><button class="sb-close" id="sbx" aria-label="Close menu">✕</button><div class="logo"><span>T</span>TAiM</div>${NAV.map(([p, l, i]) => `<a href="#/${p}" class="${p === path ? 'on' : ''}">${i} ${l}</a>`).join('')}<button class="out" id="out">⎋ Log out</button></aside>
@@ -33,13 +36,19 @@ else {
     app.innerHTML = '<div class="state">Loading…</div>'; auth.ready().then(() => {
         route();
         let uid = auth.user?.id ?? null;
-        // Fires for sign-in and sign-out in this tab and in other tabs. Acts only when the signed-in user actually changes.
+        // Fires for sign-in, sign-out and account switches, in this tab and (Firebase syncs the session) in other tabs.
+        // Acts only when the signed-in user actually changes, so repeated events cannot cause repeated redirects.
         auth.onChange(u => {
             const next = u?.uid ?? null; if (next === uid) return; uid = next;
-            // Signed out: the route guard sends protected pages to /login. /login is public, so this cannot loop.
-            if (!next) return route();
-            // Signed in. On /login: if this tab's own login/register/Google call is running (login.js disables #go meanwhile) it navigates itself when done, so do not interrupt it; otherwise another tab signed in, so open the workspace.
-            if (hashPath() === 'login') { if (!document.querySelector('#go')?.disabled) location.hash = '#/dashboard'; return }
+            const path = hashPath(), page = Object.hasOwn(pages, path) && pages[path];
+            if (!next) {
+                // Signed out. On a protected page go to /login (public, so no loop); anywhere else just redraw the page.
+                if (page && !page.public) redirect('#/login'); else route();
+                return;
+            }
+            // Signed in (or switched account). On /login: if this tab's own login/register call is running (login.js disables #go
+            // meanwhile) it navigates itself when done, so do not interrupt it; otherwise another tab signed in, so open the workspace.
+            if (path === 'login') { if (!document.querySelector('#go')?.disabled) redirect('#/dashboard'); return }
             route();
         });
     })

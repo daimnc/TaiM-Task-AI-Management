@@ -11,6 +11,8 @@ const signedIn = r => { fbUser = r.raw; return { token: r.token, user: r.user } 
 const saved = () => { try { return JSON.parse(localStorage.getItem(CONFIG.USER_KEY)) } catch { return null } };
 // Single place that drops the in-memory Firebase user together with the stored profile, so they can never disagree.
 const wipe = () => { fbUser = null; localStorage.removeItem(CONFIG.TOKEN_KEY); localStorage.removeItem(CONFIG.USER_KEY) };
+// Real mode only: always drops the in-memory Firebase user, even if localStorage is unavailable and removeItem throws.
+const wipeReal = () => { fbUser = null; try { wipe() } catch { } };
 export const auth = {
   // Mock: stored token. Real: `token` is only a non-secret "signed in" marker for the router; the real ID token comes from getToken().
   get token() { if (!CONFIG.USE_MOCK) return fbUser ? 'firebase-session' : null; try { return localStorage.getItem(CONFIG.TOKEN_KEY) } catch { return null } },
@@ -20,12 +22,20 @@ export const auth = {
   },
   set(token, user) { if (CONFIG.USE_MOCK) localStorage.setItem(CONFIG.TOKEN_KEY, token); localStorage.setItem(CONFIG.USER_KEY, JSON.stringify(user)) },
   // Also ends the Firebase session in real mode (fire-and-forget) so memory and Firebase stay in sync.
-  clear() { wipe(); if (!CONFIG.USE_MOCK && fbLoad) fbLoad.then(m => m.logout()).catch(() => { }) },
+  clear() {
+    if (CONFIG.USE_MOCK) { wipe(); return }
+    wipeReal(); // memory is cleaned first and unconditionally, so a failing step below can never leave a stale fbUser
+    if (fbLoad) fbLoad.then(m => m.logout()).catch(() => { fbUser = null })
+  },
   // Resolves once Firebase has restored (or failed to restore) the session. Immediate in mock mode.
   ready: () => startAuth(),
   onChange: f => { subs.add(f); return () => subs.delete(f) },
   async getToken() { if (CONFIG.USE_MOCK) return this.token; return (await loadFirebase()).getIdToken() },
-  async signOut() { if (CONFIG.USE_MOCK) { auth.clear(); return } await (await loadFirebase()).logout(); wipe() }
+  async signOut() {
+    if (CONFIG.USE_MOCK) { auth.clear(); return }
+    // finally: even if Firebase's signOut fails, this tab must not keep believing the user is signed in.
+    try { await (await loadFirebase()).logout() } finally { wipeReal() }
+  }
 };
 
 async function real(method, path, body) {
