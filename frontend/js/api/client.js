@@ -1,7 +1,7 @@
 // ALL data access goes through `api`. UI never calls fetch or touches mock data directly.
 import { CONFIG } from '../config.js';
-import { seed } from './mockData.js';
-import { iso, addDays, daysUntil, dueText, fmtDate, topPick, sortByDue } from '../ui.js';
+import { seed, KEYS, bootstrapMockV2, mockV2Request, MockHttpError } from './mockData.js';
+import { iso, addDays, daysUntil, dueText, fmtDate, topPick, sortByDue, today } from '../ui.js';
 export class ApiError extends Error { constructor(m, status) { super(m); this.status = status } }
 // ---- Firebase (real mode only; never loaded when USE_MOCK is true) ----
 let fbLoad = null, fbUser = null, readyP = null; const subs = new Set();
@@ -82,7 +82,46 @@ async function mock(method, path, body) {
   }
   throw new ApiError('Not found: ' + method + ' ' + path, 404);
 }
-const req = (m, p, b) => (CONFIG.USE_MOCK ? mock : real)(m, p, b);
+// ---- Mock database v2 (Phase 3). DORMANT: keep MOCK_V2 = false until every page uses the v2 data shapes (Batch 3.2). ----
+// While false, mockV2 is never called, so no taim_mock_db_v2 or backup key is ever created and the legacy mock above is used.
+// When true (mock mode only), the first request loads/converts the data via bootstrapMockV2 (see mockData.js).
+const MOCK_V2 = false; let v2db = null;
+
+async function mockV2(method, path, body) {
+  await new Promise(r => setTimeout(r, 250));
+
+  if (!v2db) {
+    const r = bootstrapMockV2(localStorage);
+    if (!r.ok) throw new ApiError(r.message, 500);
+    v2db = r.db;
+  }
+
+  try {
+    if (method === 'GET') {
+      return mockV2Request(v2db, method, path, body, {
+        todayIso: iso(today())
+      });
+    }
+
+    // Apply mutations to a copy first.
+    const nextDb = JSON.parse(JSON.stringify(v2db));
+
+    const out = mockV2Request(nextDb, method, path, body, {
+      todayIso: iso(today())
+    });
+
+    // Save successfully before accepting the new in-memory state.
+    localStorage.setItem(KEYS.v2, JSON.stringify(nextDb));
+    v2db = nextDb;
+
+    return out;
+  } catch (e) {
+    throw e instanceof MockHttpError
+      ? new ApiError(e.message, e.status)
+      : e;
+  }
+}
+const req = (m, p, b) => (CONFIG.USE_MOCK ? (MOCK_V2 ? mockV2 : mock) : real)(m, p, b);
 export const api = {
   login: b => CONFIG.USE_MOCK ? req('POST', '/auth/login', b) : loadFirebase().then(m => m.login(b.email, b.password)).then(signedIn),
   register: b => CONFIG.USE_MOCK ? req('POST', '/auth/register', b) : loadFirebase().then(m => m.register(b)).then(signedIn),
@@ -91,5 +130,9 @@ export const api = {
   getProgress: () => req('GET', '/progress'),
   getSettings: () => req('GET', '/settings'), saveSettings: b => req('PUT', '/settings', b),
   getReminderPrefs: () => req('GET', '/reminders/preferences'), saveReminderPrefs: b => req('PUT', '/reminders/preferences', b),
-  planTask: b => req('POST', '/ai/plan', b), askAssistant: b => req('POST', '/ai/chat', b)
+  planTask: b => req('POST', '/ai/plan', b), askAssistant: b => req('POST', '/ai/chat', b),
+  // Phase 1 API (subjects, task actions). Not used by any page yet (Batch 3.2). With the legacy mock they answer 404.
+  getSubjects: () => req('GET', '/subjects'), createSubject: b => req('POST', '/subjects', b),
+  renameSubject: (id, b) => req('PATCH', '/subjects/' + encodeURIComponent(id), b), deleteSubject: id => req('DELETE', '/subjects/' + encodeURIComponent(id)),
+  startTask: id => req('POST', '/tasks/' + encodeURIComponent(id) + '/start'), completeTask: id => req('POST', '/tasks/' + encodeURIComponent(id) + '/complete'), reopenTask: id => req('POST', '/tasks/' + encodeURIComponent(id) + '/reopen')
 };

@@ -24,3 +24,14 @@ export function modal(title,body,onSubmit){
  $('[data-x]',o).onclick=close;o.onclick=e=>{if(e.target===o)close()};
  f.onsubmit=async e=>{e.preventDefault();const b=$('.primary',f);b.disabled=true;try{await onSubmit(new FormData(f));close()}catch(x){err.textContent=x.message;err.hidden=false;b.disabled=false}};
 }
+// ---- Phase 1 API contract helpers (used by the pages from Batch 3.2). Every helper above is unchanged. ----
+// Values are the backend's lowercase enums; these maps only add the text shown to the student.
+export const CATEGORY_LABELS={assignment:'Assignment',project:'Project',exam:'Exam',quiz:'Quiz',research:'Research',other:'Other'};
+export const IMPORTANCE_LABELS={high:'High',medium:'Medium',low:'Low'};
+export const categoryLabel=c=>Object.hasOwn(CATEGORY_LABELS,c)?CATEGORY_LABELS[c]:String(c??'');
+export const importanceLabel=i=>Object.hasOwn(IMPORTANCE_LABELS,i)?IMPORTANCE_LABELS[i]:String(i??'');
+// "Done" is the task's status. Never infer it from progress: a reopened task is in_progress at 100%.
+export const isCompleted=t=>t?.status==='completed';
+export const importancePill=i=>{const k=Object.hasOwn(IMPORTANCE_LABELS,i)?i:'medium';return `<span class="pill ${k}">${IMPORTANCE_LABELS[k]}</span>`};
+// Same display rule the server's fallback uses: high-importance open task with the least progress, else the soonest.
+export const topOpenTask=ts=>{const o=ts.filter(t=>!isCompleted(t)),hi=o.filter(t=>t.importance==='high').sort((a,b)=>a.progress_pct-b.progress_pct||a.deadline.localeCompare(b.deadline))[0];return hi||[...o].sort((a,b)=>a.deadline.localeCompare(b.deadline))[0]};
