@@ -8,11 +8,14 @@ from routes import api
 from security import firebase_token_verifier
 
 
-def create_app(db=None, token_verifier=None):
-    """`db` and `token_verifier` are only passed in by the tests. Normal startup uses Firebase."""
+def create_app(db=None, token_verifier=None, enable_v2=None):
+    """`db`, `token_verifier` and `enable_v2` are only passed in by the tests. Normal startup uses Firebase and
+    reads the TAIM_ENABLE_V2 setting (default: off)."""
     app = Flask(__name__)
 
     app.config.from_object(Config)
+    if enable_v2 is not None:
+        app.config["ENABLE_V2"] = bool(enable_v2)
 
     CORS(
         app,

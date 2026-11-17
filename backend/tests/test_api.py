@@ -1,58 +1,25 @@
-"""API tests. They use a fake Firestore and fake token verification, so no Firebase account or network is needed.
+"""General API tests: health, error format, CORS, authentication, and the deterministic AI fallback endpoints.
 
 Run from the backend folder:
-    python -m unittest tests.test_api -v        (no extra packages)
-    python -m pytest tests/test_api.py -v       (if pytest is installed)
+    python -m unittest discover -s tests -v     (no extra packages)
+    python -m pytest tests -v                   (if pytest is installed)
 """
-import os
 import pathlib
 import sys
 import unittest
-from datetime import date
 
-os.environ["FIREBASE_PROJECT_ID"] = ""  # keep the tests away from any real Firebase project (.env is not overridden)
-HERE = pathlib.Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-import dates  # noqa: E402
-from app import create_app  # noqa: E402
-from fakes import FakeFirestore, fake_verifier  # noqa: E402
-
-TODAY = date(2026, 11, 16)  # a Monday
-TASK = {"title": "Programming Activity 05", "course": "Computer Programming", "category": "Assignment",
-        "deadline": "2026-11-20", "priority": "High", "progress": 65}
-TASK_FIELDS = {"id", "title", "course", "category", "deadline", "priority", "progress"}
+from base import TASK, ApiTestCase, create_app, fake_verifier  # noqa: E402
 
 PROTECTED = [
+    ("GET", "/api/subjects"), ("POST", "/api/subjects"), ("PATCH", "/api/subjects/abc"), ("DELETE", "/api/subjects/abc"),
     ("GET", "/api/tasks"), ("POST", "/api/tasks"), ("PATCH", "/api/tasks/abc"), ("DELETE", "/api/tasks/abc"),
+    ("POST", "/api/tasks/abc/start"), ("POST", "/api/tasks/abc/complete"), ("POST", "/api/tasks/abc/reopen"),
     ("GET", "/api/settings"), ("PUT", "/api/settings"),
     ("GET", "/api/reminders/preferences"), ("PUT", "/api/reminders/preferences"),
     ("GET", "/api/progress"), ("POST", "/api/ai/plan"), ("POST", "/api/ai/chat"),
 ]
-
-
-class ApiTestCase(unittest.TestCase):
-    def setUp(self):
-        self.db = FakeFirestore()
-        self.app = create_app(db=self.db, token_verifier=fake_verifier)
-        self.client = self.app.test_client()
-        self._real_today = dates.today
-        dates.today = lambda: TODAY
-
-    def tearDown(self):
-        dates.today = self._real_today
-
-    def call(self, method, path, user="alice", json=None, headers=None, **kwargs):
-        sent = dict(headers or {})
-        if user:
-            sent["Authorization"] = f"Bearer token-{user}"
-        return self.client.open(path, method=method, json=json, headers=sent, **kwargs)
-
-    def add_task(self, user="alice", **over):
-        response = self.call("POST", "/api/tasks", user, json={**TASK, **over})
-        self.assertEqual(response.status_code, 201, response.get_json())
-        return response.get_json()
 
 
 class HealthAndErrorFormatTests(ApiTestCase):
@@ -117,208 +84,18 @@ class AuthTests(ApiTestCase):
         self.assertEqual(r.status_code, 200)
 
     def test_token_without_uid_is_rejected(self):
-        app = create_app(db=self.db, token_verifier=lambda token: {"email": "x@example.com"})
+        app = create_app(db=self.db, token_verifier=lambda token: {"email": "x@example.com"}, enable_v2=True)
         r = app.test_client().get("/api/tasks", headers={"Authorization": "Bearer anything"})
         self.assertEqual(r.status_code, 401)
 
-    def test_client_supplied_user_ids_are_ignored(self):
-        self.add_task("bob", title="Bob private task")
-        r = self.call("GET", "/api/tasks?uid=bob&userId=bob", user="alice",
-                      headers={"X-User-Id": "bob", "X-Uid": "bob"})
-        self.assertEqual(r.get_json(), [])
-        r = self.call("POST", "/api/tasks", user="alice", json={**TASK, "uid": "bob", "userId": "bob"})
-        self.assertEqual(r.status_code, 201)
-        self.assertEqual(len(self.call("GET", "/api/tasks", user="bob").get_json()), 1)
-
     def test_missing_firebase_config_is_503_but_missing_token_is_still_401(self):
-        app = create_app(token_verifier=fake_verifier)  # no db -> FIREBASE_PROJECT_ID is empty in tests
+        app = create_app(token_verifier=fake_verifier, enable_v2=True)  # no db -> FIREBASE_PROJECT_ID is empty in tests
         client = app.test_client()
         self.assertEqual(client.get("/api/tasks").status_code, 401)
         r = client.get("/api/tasks", headers={"Authorization": "Bearer token-alice"})
         self.assertEqual(r.status_code, 503)
         self.assertIn("detail", r.get_json())
         self.assertEqual(client.get("/api/health").status_code, 200)
-
-
-class TaskTests(ApiTestCase):
-    def test_create_returns_exact_frontend_shape(self):
-        task = self.add_task()
-        self.assertEqual(set(task), TASK_FIELDS)
-        self.assertTrue(task["id"])
-        self.assertEqual({k: v for k, v in task.items() if k != "id"}, TASK)
-
-    def test_create_defaults_for_optional_fields(self):
-        r = self.call("POST", "/api/tasks", json={"title": "  Read ch. 3  ", "category": "Project",
-                                                   "priority": "Low", "deadline": "2026-12-01"})
-        task = r.get_json()
-        self.assertEqual((task["title"], task["course"], task["progress"]), ("Read ch. 3", "", 0))
-
-    def test_client_supplied_id_and_internal_fields_are_ignored(self):
-        task = self.add_task(id="hacked", completedOn="2020-01-01", createdAt="x", foo="bar")
-        self.assertNotEqual(task["id"], "hacked")
-        self.assertEqual(set(task), TASK_FIELDS)
-        self.assertEqual(self.call("GET", "/api/tasks/hacked", json=None).status_code, 405)
-
-    def test_validation_errors(self):
-        bad = {
-            "title": ["", "   ", None, 5, "x" * 121],
-            "category": ["Homework", "", None, ["Assignment"]],
-            "priority": ["Urgent", "high", None],
-            "deadline": ["2026-02-30", "11/01/2026", "2026-1-5", "20261101", "", None, 5],
-            "progress": [101, -1, "50", True, 50.5, None],
-            "course": [5, "x" * 101],
-        }
-        for field, values in bad.items():
-            for value in values:
-                r = self.call("POST", "/api/tasks", json={**TASK, field: value})
-                self.assertEqual(r.status_code, 422, (field, value))
-                body = r.get_json()
-                self.assertIsInstance(body["detail"], str)
-                self.assertIn(field, body["errors"])
-
-    def test_missing_required_fields(self):
-        r = self.call("POST", "/api/tasks", json={})
-        self.assertEqual(r.status_code, 422)
-        self.assertEqual(set(r.get_json()["errors"]), {"title", "category", "deadline", "priority"})
-
-    def test_body_must_be_a_json_object(self):
-        for payload in ("not json", "[1,2]", '"text"', ""):
-            r = self.call("POST", "/api/tasks", data=payload, content_type="application/json")
-            self.assertEqual(r.status_code, 400, payload)
-            self.assertIn("detail", r.get_json())
-
-    def test_list_returns_only_own_tasks_in_creation_order(self):
-        first = self.add_task(title="First")
-        second = self.add_task(title="Second")
-        self.add_task("bob", title="Bob's")
-        titles = [t["title"] for t in self.call("GET", "/api/tasks").get_json()]
-        self.assertEqual(titles, ["First", "Second"])
-        self.assertEqual([t["id"] for t in self.call("GET", "/api/tasks").get_json()], [first["id"], second["id"]])
-
-    def test_patch_updates_only_sent_fields(self):
-        task = self.add_task()
-        r = self.call("PATCH", f"/api/tasks/{task['id']}", json={"progress": 100, "ignored": 1})
-        self.assertEqual(r.status_code, 200)
-        updated = r.get_json()
-        self.assertEqual(set(updated), TASK_FIELDS)
-        self.assertEqual((updated["progress"], updated["title"], updated["priority"]), (100, TASK["title"], "High"))
-        self.assertEqual(self.call("GET", "/api/tasks").get_json()[0]["progress"], 100)
-
-    def test_patch_validation_and_empty_body(self):
-        task_id = self.add_task()["id"]
-        for body in ({}, {"unknown": 1}, {"progress": 150}, {"deadline": "soon"}, {"priority": "x"}):
-            r = self.call("PATCH", f"/api/tasks/{task_id}", json=body)
-            self.assertEqual(r.status_code, 422, body)
-        self.assertEqual(self.call("GET", "/api/tasks").get_json()[0]["progress"], 65)
-
-    def test_patch_and_delete_unknown_id_are_404(self):
-        self.assertEqual(self.call("PATCH", "/api/tasks/nope", json={"progress": 5}).status_code, 404)
-        self.assertEqual(self.call("DELETE", "/api/tasks/nope").status_code, 404)
-        for weird in ("..", ".", "a.b", "a%20b"):
-            self.assertEqual(self.call("DELETE", f"/api/tasks/{weird}").status_code, 404, weird)
-
-    def test_students_cannot_change_or_delete_each_others_tasks(self):
-        task_id = self.add_task("alice")["id"]
-        self.assertEqual(self.call("PATCH", f"/api/tasks/{task_id}", "bob", json={"title": "Pwned"}).status_code, 404)
-        self.assertEqual(self.call("DELETE", f"/api/tasks/{task_id}", "bob").status_code, 404)
-        task = self.call("GET", "/api/tasks", "alice").get_json()[0]
-        self.assertEqual(task["title"], TASK["title"])
-        self.assertEqual(self.call("GET", "/api/tasks", "bob").get_json(), [])
-
-    def test_delete_returns_204_and_removes_task(self):
-        task_id = self.add_task()["id"]
-        r = self.call("DELETE", f"/api/tasks/{task_id}")
-        self.assertEqual((r.status_code, r.data), (204, b""))
-        self.assertEqual(self.call("GET", "/api/tasks").get_json(), [])
-        self.assertEqual(self.call("DELETE", f"/api/tasks/{task_id}").status_code, 404)
-
-
-class SettingsAndRemindersTests(ApiTestCase):
-    def test_settings_defaults_come_from_token_not_request(self):
-        r = self.call("GET", "/api/settings", "alice")
-        self.assertEqual(r.get_json(), {"name": "Alice", "program": "", "leadDays": 2, "sessionMinutes": 45,
-                                        "weeklySummary": True})
-        self.assertEqual(self.call("GET", "/api/settings", "bob").get_json()["name"], "Bob")
-
-    def test_settings_put_then_get_and_isolation(self):
-        body = {"name": " Ana Reyes ", "program": "BS CS", "leadDays": 5, "sessionMinutes": 60, "weeklySummary": False}
-        r = self.call("PUT", "/api/settings", json=body)
-        self.assertEqual(r.status_code, 200)
-        expected = {**body, "name": "Ana Reyes"}
-        self.assertEqual(r.get_json(), expected)
-        self.assertEqual(self.call("GET", "/api/settings").get_json(), expected)
-        self.assertEqual(self.call("GET", "/api/settings", "bob").get_json()["name"], "Bob")
-
-    def test_settings_partial_update_keeps_other_values(self):
-        self.call("PUT", "/api/settings", json={"program": "BS IT", "leadDays": 3})
-        r = self.call("PUT", "/api/settings", json={"sessionMinutes": 25}).get_json()
-        self.assertEqual((r["program"], r["leadDays"], r["sessionMinutes"]), ("BS IT", 3, 25))
-
-    def test_settings_validation(self):
-        bad = [{}, {"name": ""}, {"name": 5}, {"name": "x" * 81}, {"program": 7}, {"leadDays": 4}, {"leadDays": True},
-               {"leadDays": "2"}, {"leadDays": 2.0}, {"sessionMinutes": 30}, {"weeklySummary": "yes"},
-               {"weeklySummary": 1}]
-        for body in bad:
-            r = self.call("PUT", "/api/settings", json=body)
-            self.assertEqual(r.status_code, 422, body)
-            self.assertIsInstance(r.get_json()["detail"], str)
-
-    def test_reminder_defaults_put_get_and_isolation(self):
-        self.assertEqual(self.call("GET", "/api/reminders/preferences").get_json(),
-                         {"deadline": True, "dailySummary": True, "progressCheckin": False, "quietHours": True})
-        full = {"deadline": False, "dailySummary": False, "progressCheckin": True, "quietHours": False}
-        self.assertEqual(self.call("PUT", "/api/reminders/preferences", json=full).get_json(), full)
-        self.assertEqual(self.call("GET", "/api/reminders/preferences").get_json(), full)
-        self.assertTrue(self.call("GET", "/api/reminders/preferences", "bob").get_json()["deadline"])
-
-    def test_reminder_partial_update_and_validation(self):
-        r = self.call("PUT", "/api/reminders/preferences", json={"progressCheckin": True}).get_json()
-        self.assertEqual((r["progressCheckin"], r["deadline"]), (True, True))
-        for body in ({}, {"deadline": "yes"}, {"quietHours": 0}, {"deadline": None}):
-            self.assertEqual(self.call("PUT", "/api/reminders/preferences", json=body).status_code, 422, body)
-
-
-class ProgressTests(ApiTestCase):
-    KEYS = {"completionRate", "onTimeRate", "completed", "overdue", "weeklyChange", "weeklyProductivity",
-            "weeklyCompletion", "insight", "insightSource"}
-
-    def test_no_tasks_gives_zero_defaults_in_the_expected_shape(self):
-        p = self.call("GET", "/api/progress").get_json()
-        self.assertEqual(set(p), self.KEYS)
-        self.assertEqual((p["completionRate"], p["onTimeRate"], p["completed"], p["overdue"], p["weeklyChange"]),
-                         (0, 0, 0, 0, 0))
-        self.assertEqual(p["weeklyProductivity"], [0] * 7)
-        self.assertEqual(p["weeklyCompletion"], [0] * 4)
-        self.assertIsInstance(p["insight"], str)
-
-    def test_statistics_come_from_stored_tasks(self):
-        self.add_task(title="Done on time", progress=100, deadline="2026-11-20")   # completed today (Mon)
-        self.add_task(title="Overdue", progress=40, deadline="2026-11-10")
-        self.add_task(title="Future", progress=0, deadline="2026-11-30")
-        self.add_task("bob", title="Not mine", progress=100)
-        p = self.call("GET", "/api/progress").get_json()
-        self.assertEqual((p["completed"], p["overdue"], p["completionRate"], p["onTimeRate"]), (1, 1, 33, 100))
-        self.assertEqual(p["weeklyProductivity"], [1, 0, 0, 0, 0, 0, 0])
-        self.assertEqual(p["weeklyCompletion"], [0, 0, 0, 1])
-        self.assertEqual(p["weeklyChange"], 0)  # no tasks were completed last week
-        self.assertIn("1 overdue", p["insight"])
-        self.assertIn("Assignment", p["insight"])
-
-    def test_late_completion_lowers_on_time_rate(self):
-        task = self.add_task(progress=0, deadline="2026-11-10")
-        self.call("PATCH", f"/api/tasks/{task['id']}", json={"progress": 100})
-        p = self.call("GET", "/api/progress").get_json()
-        self.assertEqual((p["completed"], p["onTimeRate"], p["overdue"]), (1, 0, 0))
-
-    def test_reopening_a_task_removes_it_from_completed_statistics(self):
-        task = self.add_task(progress=100)
-        self.call("PATCH", f"/api/tasks/{task['id']}", json={"progress": 80})
-        p = self.call("GET", "/api/progress").get_json()
-        self.assertEqual((p["completed"], p["weeklyCompletion"]), (0, [0, 0, 0, 0]))
-
-    def test_internal_completion_date_is_not_exposed_on_tasks(self):
-        self.add_task(progress=100)
-        self.assertEqual(set(self.call("GET", "/api/tasks").get_json()[0]), TASK_FIELDS)
 
 
 class AiTests(ApiTestCase):
@@ -363,21 +140,30 @@ class AiTests(ApiTestCase):
             self.assertIn(field, r.get_json()["errors"])
 
     def test_chat_priority_question_uses_own_tasks_only(self):
-        self.add_task(title="Low one", priority="Low", progress=0)
-        self.add_task(title="Urgent paper", priority="High", progress=20)
-        self.add_task("bob", title="Bob secret", priority="High", progress=0)
+        self.add_task(title="Low one", importance="low")
+        urgent = self.add_task(title="Urgent paper", importance="high")
+        self.call("PATCH", f"/api/tasks/{urgent['task_id']}", json={"progress_pct": 20})
+        self.add_task("bob", title="Bob secret", importance="high")
         body = self.call("POST", "/api/ai/chat", json={"message": "What should I work on first?"}).get_json()
         self.assertIn('"Urgent paper"', body["reply"])
         self.assertIn("20% done", body["reply"])
         self.assertNotIn("Bob", body["reply"])
-        self.assertEqual((body["mock"], body["aiGenerated"], body["source"]),
-                         (True, False, "deterministic-fallback"))
+        self.assertEqual((body["mock"], body["aiGenerated"], body["source"]), (True, False, "deterministic-fallback"))
         self.assertIn("No AI model was used", body["notice"])
 
+    def test_chat_ignores_completed_tasks_when_picking(self):
+        done = self.add_task(title="Already done", importance="high")
+        self.call("POST", f"/api/tasks/{done['task_id']}/complete")
+        self.add_task(title="Still open", importance="low")
+        reply = self.call("POST", "/api/ai/chat", json={"message": "what first?"}).get_json()["reply"]
+        self.assertIn('"Still open"', reply)
+        self.assertNotIn("Already done", reply)
+
     def test_chat_deadlines_and_other_questions(self):
-        self.add_task(title="A", deadline="2026-11-18", progress=0)
-        self.add_task(title="B", deadline="2026-11-17", progress=0)
-        self.add_task(title="Finished", deadline="2026-11-16", progress=100)
+        self.add_task(title="A", deadline="2026-11-18")
+        self.add_task(title="B", deadline="2026-11-17")
+        finished = self.add_task(title="Finished", deadline="2026-11-16")
+        self.call("POST", f"/api/tasks/{finished['task_id']}/complete")
         reply = self.call("POST", "/api/ai/chat", json={"message": "what is due soon"}).get_json()["reply"]
         self.assertEqual(reply, "Upcoming: B (Nov 17); A (Nov 18).")
         other = self.call("POST", "/api/ai/chat", json={"message": "hello"}).get_json()["reply"]

@@ -10,13 +10,16 @@ from flask import request
 from dates import parse_date
 from errors import ApiError
 
-# ---- Allowed values (these match the dropdowns in the frontend) ----
-CATEGORIES = ("Assignment", "Research", "Project", "Examination")
-PRIORITIES = ("High", "Medium", "Low")
+# ---- Allowed values (approved decision H5) ----
+CATEGORIES = ("assignment", "project", "exam", "quiz", "research", "other")
+IMPORTANCE = ("low", "medium", "high")
+STATUS_NOT_STARTED, STATUS_IN_PROGRESS, STATUS_COMPLETED = "not_started", "in_progress", "completed"
+STATUSES = (STATUS_NOT_STARTED, STATUS_IN_PROGRESS, STATUS_COMPLETED)
 LEAD_DAYS = (1, 2, 3, 5, 7)
 SESSION_MINUTES = (25, 45, 60, 90)
 
 _DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 # ---- Reading the request ----
@@ -52,6 +55,12 @@ def _one_of(allowed):
             raise ValueError("must be one of: " + ", ".join(str(a) for a in allowed) + ".")
         return value
     return rule
+
+
+def _id(value):
+    if not isinstance(value, str) or not _ID_RE.match(value):
+        raise ValueError("must be a valid id.")
+    return value
 
 
 def _date(value):
@@ -94,21 +103,35 @@ def _hours_per_day(value):
 
 
 # ---- Rule tables: field -> (rule, required, default) ----
+# `status`, `progress_pct`, `completed_on`, `student_id`, `task_id`, `created_at` are never accepted from the client
+# as task data: the server owns them (see TASK_CREATE_FORBIDDEN / TASK_UPDATE_FORBIDDEN and store.py).
+SUBJECT_RULES = {
+    "subject_name": (_text(100), True, None),
+}
+
 TASK_RULES = {
     "title": (_text(120), True, None),
-    "course": (_text(100, allow_empty=True), False, ""),
+    "subject_id": (_id, True, None),
     "category": (_one_of(CATEGORIES), True, None),
     "deadline": (_date, True, None),
-    "priority": (_one_of(PRIORITIES), True, None),
-    "progress": (_progress, False, 0),
+    "importance": (_one_of(IMPORTANCE), True, None),
+}
+
+# PATCH accepts the same fields as create, plus progress (changing progress never changes status).
+TASK_UPDATE_RULES = {**TASK_RULES, "progress_pct": (_progress, False, None)}
+
+TASK_CREATE_FORBIDDEN = {
+    "status": "is set by the server: new tasks start as not_started.",
+    "progress_pct": "is set by the server: new tasks start at 0.",
+}
+TASK_UPDATE_FORBIDDEN = {
+    "status": "cannot be changed here. Use the start, complete or reopen actions.",
 }
 
 SETTINGS_RULES = {
-    "name": (_text(80), False, None),
-    "program": (_text(100, allow_empty=True), False, None),
+    "full_name": (_text(80), False, None),
     "leadDays": (_one_of(LEAD_DAYS), False, None),
     "sessionMinutes": (_one_of(SESSION_MINUTES), False, None),
-    "weeklySummary": (_bool, False, None),
 }
 
 REMINDER_RULES = {
@@ -128,6 +151,13 @@ PLAN_RULES = {
 CHAT_RULES = {
     "message": (_text(1000), True, None),
 }
+
+
+def reject_fields(body, forbidden):
+    """422 when the client sends a field that only the server may set. `forbidden` maps field -> message."""
+    errors = {name: message for name, message in forbidden.items() if name in body}
+    if errors:
+        fail(errors)
 
 
 def validate(body, rules, partial=False):

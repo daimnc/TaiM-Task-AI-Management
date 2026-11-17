@@ -13,6 +13,7 @@ import re
 from datetime import timedelta
 
 from dates import due_text, parse_date, safe_date, short_date
+from validation import STATUS_COMPLETED
 
 SOURCE = "deterministic-fallback"
 
@@ -52,14 +53,14 @@ def build_plan(title, deadline, hours_per_day, today):
 
 
 def _open_tasks(tasks):
-    return [t for t in tasks if t.get("progress", 0) < 100]
+    return [t for t in tasks if t.get("status") != STATUS_COMPLETED]
 
 
 def _top_pick(open_tasks):
-    """High-priority task with the least progress; otherwise the task due soonest."""
-    high = [t for t in open_tasks if t.get("priority") == "High"]
+    """High-importance task with the least progress; otherwise the task due soonest."""
+    high = [t for t in open_tasks if t.get("importance") == "high"]
     if high:
-        return min(high, key=lambda t: (t.get("progress", 0), t.get("deadline", "")))
+        return min(high, key=lambda t: (t.get("progress_pct", 0), t.get("deadline", "")))
     return min(open_tasks, key=lambda t: t.get("deadline", ""))
 
 
@@ -75,7 +76,7 @@ def build_reply(message, tasks, today):
     if re.search(r"first|priorit|start", question):
         if open_tasks:
             pick = _top_pick(open_tasks)
-            reply = (f'Based on your recorded tasks, start with "{pick["title"]}" ({pick["progress"]}% done, '
+            reply = (f'Based on your recorded tasks, start with "{pick["title"]}" ({pick["progress_pct"]}% done, '
                      f'{due_text(_days_until(pick, today)).lower()}). Try a 25-minute session.')
         else:
             reply = "You have no open tasks."
