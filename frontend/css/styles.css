@@ -66,3 +66,8 @@ label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--mut)
  .toast{left:12px;right:12px;bottom:max(12px,env(safe-area-inset-bottom));text-align:center}.msg{max-width:90%}
 }
 input[type=range]{accent-color:var(--pur);padding:0}
+[hidden]{display:none!important}
+.pill.st-not_started{background:#eef0f6;color:#6b7194}.pill.st-in_progress{background:#e9e6ff;color:var(--pur)}.pill.st-completed{background:#e8f7ee;color:#2a9d5c}
+.od{color:#d64545;font-weight:600;font-size:11px}
+.hint{display:block;color:var(--mut);margin-top:4px;font-size:12px}
+.item small{display:block;color:var(--mut)}.item .acts{display:flex;gap:4px;flex-shrink:0}

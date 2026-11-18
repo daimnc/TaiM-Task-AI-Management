@@ -35,3 +35,11 @@ export const isCompleted=t=>t?.status==='completed';
 export const importancePill=i=>{const k=Object.hasOwn(IMPORTANCE_LABELS,i)?i:'medium';return `<span class="pill ${k}">${IMPORTANCE_LABELS[k]}</span>`};
 // Same display rule the server's fallback uses: high-importance open task with the least progress, else the soonest.
 export const topOpenTask=ts=>{const o=ts.filter(t=>!isCompleted(t)),hi=o.filter(t=>t.importance==='high').sort((a,b)=>a.progress_pct-b.progress_pct||a.deadline.localeCompare(b.deadline))[0];return hi||[...o].sort((a,b)=>a.deadline.localeCompare(b.deadline))[0]};
+// ---- Phase 3.2 Stage 1 helpers (additive) ----
+export const STATUS_LABELS={not_started:'Not started',in_progress:'In progress',completed:'Completed'};
+export const statusLabel=s=>Object.hasOwn(STATUS_LABELS,s)?STATUS_LABELS[s]:String(s??'');
+export const statusPill=s=>{const k=Object.hasOwn(STATUS_LABELS,s)?s:'not_started';return `<span class="pill st-${k}">${STATUS_LABELS[k]}</span>`};
+// Name of the subject with this id, or a visible placeholder (never blank, never throws).
+export const subjectName=(subjects,id)=>(subjects||[]).find(s=>s.subject_id===id)?.subject_name??'Unknown subject';
+// Trim and collapse runs of spaces, the same clean-text rule the API uses for names.
+export const cleanName=s=>String(s??'').split(/\s+/).filter(Boolean).join(' ');
