@@ -7,7 +7,8 @@ Data layout (approved decisions H1/H2; every document carries its owner, so OWNE
                                  progressCheckin, quietHours}
     subjects/{subject_id}        subject_id, student_id, subject_name
     tasks/{task_id}              task_id, student_id, subject_id, title, deadline, importance, category,
-                                 progress_pct, status, completed_on (only while completed), created_at, updated_at
+                                 progress_pct, status, completed_on (only while completed), created_at, updated_at,
+                                 subtasks (optional list, embedded: subtask_id, title, estimated_minutes, status)
 
 The legacy `users/{uid}/...` data is never read, written or deleted here.
 
@@ -23,10 +24,11 @@ Queries use equality filters only and sort in Python, so no composite Firestore 
 """
 import hashlib
 import re
+import secrets
 from datetime import datetime, timezone
 
 from errors import ApiError
-from validation import STATUS_COMPLETED, STATUS_IN_PROGRESS, STATUS_NOT_STARTED
+from validation import MAX_SAFE_INTEGER, MAX_SUBTASKS, STATUS_COMPLETED, STATUS_IN_PROGRESS, STATUS_NOT_STARTED
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
@@ -193,6 +195,79 @@ def _tasks(db):
     return db.collection("tasks")
 
 
+_SUBTASK_KEYS = {"subtask_id", "title", "estimated_minutes", "status"}
+
+
+def _percent_done(done, total):
+    """Rounded half up with integer arithmetic (same formula as the mock engine)."""
+    return (done * 100 + total // 2) // total
+
+
+def _subtask_list(data):
+    """Return validated embedded subtasks; only a genuinely missing field is backward-compatible."""
+    if "subtasks" not in data:
+        return []
+
+    items = data["subtasks"]
+    message = "must be a valid list of stored subtasks."
+    if not isinstance(items, list) or len(items) > MAX_SUBTASKS:
+        raise ApiError(422, f"subtasks: {message}", errors={"subtasks": message})
+
+    seen_ids = set()
+    for index, item in enumerate(items):
+        valid = (
+            isinstance(item, dict)
+            and set(item) == _SUBTASK_KEYS
+            and valid_id(item.get("subtask_id"))
+            and isinstance(item.get("title"), str)
+            and 0 < len(item["title"]) <= 120
+            and item["title"] == item["title"].strip()
+            and isinstance(item.get("estimated_minutes"), int)
+            and not isinstance(item.get("estimated_minutes"), bool)
+            and 1 <= item["estimated_minutes"] <= MAX_SAFE_INTEGER
+            and item.get("status") in (STATUS_NOT_STARTED, STATUS_COMPLETED)
+        )
+        if not valid or item["subtask_id"] in seen_ids:
+            detail = f"contains an invalid stored item at index {index}."
+            raise ApiError(422, f"subtasks: {detail}", errors={"subtasks": detail})
+        seen_ids.add(item["subtask_id"])
+    return items
+
+
+def _check_parent_matches_subtasks(data):
+    """While subtasks exist they alone decide the parent's progress and status. Tasks without subtasks are skipped."""
+    items = data.get("subtasks") if isinstance(data.get("subtasks"), list) else []
+    if not items:
+        return
+    total = len(items)
+    done = sum(1 for item in items if item.get("status") == STATUS_COMPLETED)
+    problems = []
+    progress = data.get("progress_pct")
+    if isinstance(progress, bool) or not isinstance(progress, int) or progress != _percent_done(done, total):
+        problems.append("progress does not match its subtasks")
+    expected = (STATUS_COMPLETED,) if done == total else (STATUS_IN_PROGRESS,) if done else (STATUS_NOT_STARTED, STATUS_IN_PROGRESS)
+    if data.get("status") not in expected:
+        problems.append("status does not match its subtasks")
+    if problems:
+        detail = "is inconsistent: " + " and ".join(problems) + "."
+        raise ApiError(422, f"subtasks: {detail}", errors={"subtasks": detail})
+
+
+def _validated_subtasks(data):
+    items = _subtask_list(data)
+    _check_parent_matches_subtasks(data)
+    return items
+
+
+def public_subtask(data):
+    return {
+        "subtask_id": data.get("subtask_id", ""),
+        "title": data.get("title", ""),
+        "estimated_minutes": data.get("estimated_minutes", 30),
+        "status": data.get("status", STATUS_NOT_STARTED),
+    }
+
+
 def public_task(data):
     """Only the fields the frontend may see. student_id and internal fields (completed_on, created_at...) stay private."""
     return {
@@ -204,26 +279,34 @@ def public_task(data):
         "category": data.get("category", "other"),
         "progress_pct": data.get("progress_pct", 0),
         "status": data.get("status", STATUS_NOT_STARTED),
+        "subtasks": [public_subtask(item) for item in _subtask_list(data)],
     }
 
 
-def get_owned_task(db, uid, task_id):
-    """(ref, data) when this student owns the task, otherwise None (missing and foreign look the same)."""
+def get_owned_task(db, uid, task_id, transaction=None):
+    """(ref, data) when this student owns the task, otherwise None (missing and foreign look the same).
+    Pass `transaction` to read inside a Firestore transaction."""
     if not valid_id(task_id):
         return None
     ref = _tasks(db).document(task_id)
-    snap = ref.get()
+    snap = ref.get() if transaction is None else ref.get(transaction=transaction)
     if not snap.exists:
         return None
     data = snap.to_dict() or {}
     if data.get("student_id") != uid:
         return None
+    # Validate stored embedded data before any task operation can read or modify it.
+    _validated_subtasks(data)
     return ref, data
 
 
 def list_task_docs(db, uid):
     """[(task_id, raw_data), ...] for this student only, in the order tasks were created."""
-    items = [(snap.id, snap.to_dict() or {}) for snap in _tasks(db).where("student_id", "==", uid).stream()]
+    items = []
+    for snap in _tasks(db).where("student_id", "==", uid).stream():
+        data = snap.to_dict() or {}
+        _validated_subtasks(data)  # Do not let list/progress consumers silently ignore corrupted embedded data.
+        items.append((snap.id, data))
     items.sort(key=lambda item: (item[1].get("created_at", ""), item[0]))
     return items
 
@@ -260,70 +343,117 @@ def create_task(db, uid, fields):
     return public_task(data)
 
 
+CONFLICT_MESSAGE = "This task was changed by another request at the same time. Please try again."
+
+
+def _is_conflict(db, exc):
+    """True when `exc` means a transaction kept conflicting and ran out of attempts."""
+    if isinstance(exc, tuple(getattr(db, "conflict_errors", ()))):  # in-memory test database
+        return True
+    if any(cls.__name__ == "Aborted" for cls in type(exc).__mro__):  # google.api_core.exceptions.Aborted
+        return True
+    return isinstance(exc, ValueError) and "attempts" in str(exc)  # Firestore: "Failed to commit transaction in 5 attempts."
+
+
+def _in_transaction(db, work):
+    """Run work(txn) atomically. Firestore re-runs `work` when a document it read changed (up to 5 attempts).
+    `work` must read first, write only with txn.set / txn.delete, and have no other side effects.
+    ApiError raised inside rolls everything back and propagates. Running out of attempts -> 409."""
+    runner = getattr(db, "run_in_transaction", None)
+    try:
+        if runner is not None:  # in-memory test database
+            return runner(work)
+        from google.cloud.firestore import transactional  # real Firestore
+        return transactional(work)(db.transaction())
+    except ApiError:
+        raise
+    except Exception as exc:
+        if _is_conflict(db, exc):
+            raise ApiError(409, CONFLICT_MESSAGE) from exc
+        raise
+
+
 def update_task(db, uid, task_id, fields):
     """Edits title/subject/category/deadline/importance/progress. Changing progress NEVER changes status.
     Returns the updated task, or None when this student has no such task."""
-    owned = get_owned_task(db, uid, task_id)
-    if owned is None:
-        return None
-    ref, data = owned
-    if "subject_id" in fields:
-        _require_owned_subject(db, uid, fields["subject_id"])
-    if "progress_pct" in fields and data.get("status") == STATUS_COMPLETED and fields["progress_pct"] < 100:
-        message = "a completed task stays at 100%. Reopen the task before lowering its progress."
-        raise ApiError(422, f"progress_pct: {message}", errors={"progress_pct": message})
-    data.update(fields)
-    data["task_id"], data["student_id"] = task_id, uid
-    data["updated_at"] = _now()
-    ref.set(data)
-    return public_task(data)
+    def work(txn):
+        owned = get_owned_task(db, uid, task_id, txn)
+        if owned is None:
+            return None
+        ref, data = owned
+        if "subject_id" in fields:
+            _require_owned_subject(db, uid, fields["subject_id"])
+        if "progress_pct" in fields and _subtask_list(data):
+            message = "is calculated from the subtasks of this task and cannot be set directly."
+            raise ApiError(422, f"progress_pct: {message}", errors={"progress_pct": message})
+        if "progress_pct" in fields and data.get("status") == STATUS_COMPLETED and fields["progress_pct"] < 100:
+            message = "a completed task stays at 100%. Reopen the task before lowering its progress."
+            raise ApiError(422, f"progress_pct: {message}", errors={"progress_pct": message})
+        data.update(fields)
+        data["task_id"], data["student_id"] = task_id, uid
+        data["updated_at"] = _now()
+        txn.set(ref, data)
+        return public_task(data)
+    return _in_transaction(db, work)
 
 
 def start_task(db, uid, task_id):
     """not_started -> in_progress (progress unchanged). Already in_progress: no change. Completed: 409."""
-    owned = get_owned_task(db, uid, task_id)
-    if owned is None:
-        return None
-    ref, data = owned
-    status = data.get("status", STATUS_NOT_STARTED)
-    if status == STATUS_COMPLETED:
-        raise ApiError(409, "This task is completed. Use reopen to work on it again.")
-    if status == STATUS_NOT_STARTED:
-        data["status"] = STATUS_IN_PROGRESS
-        data["updated_at"] = _now()
-        ref.set(data)
-    return public_task(data)
+    def work(txn):
+        owned = get_owned_task(db, uid, task_id, txn)
+        if owned is None:
+            return None
+        ref, data = owned
+        status = data.get("status", STATUS_NOT_STARTED)
+        if status == STATUS_COMPLETED:
+            raise ApiError(409, "This task is completed. Use reopen to work on it again.")
+        if status == STATUS_NOT_STARTED:
+            data["status"] = STATUS_IN_PROGRESS
+            data["updated_at"] = _now()
+            txn.set(ref, data)
+        return public_task(data)
+    return _in_transaction(db, work)
 
 
 def complete_task(db, uid, task_id, today):
     """not_started / in_progress -> completed with progress 100 and completed_on = today.
-    Already completed: no change (the original completed_on is kept)."""
-    owned = get_owned_task(db, uid, task_id)
-    if owned is None:
-        return None
-    ref, data = owned
-    if data.get("status") != STATUS_COMPLETED:
-        data["status"] = STATUS_COMPLETED
-        data["progress_pct"] = 100
-        data["completed_on"] = today.isoformat()
-        data["updated_at"] = _now()
-        ref.set(data)
-    return public_task(data)
+    Already completed: no change (the original completed_on is kept).
+    A task that has subtasks is completed only through its subtasks: 409."""
+    def work(txn):
+        owned = get_owned_task(db, uid, task_id, txn)
+        if owned is None:
+            return None
+        ref, data = owned
+        if _subtask_list(data):
+            raise ApiError(409, "This task has subtasks. Complete or reopen its subtasks instead.")
+        if data.get("status") != STATUS_COMPLETED:
+            data["status"] = STATUS_COMPLETED
+            data["progress_pct"] = 100
+            data["completed_on"] = today.isoformat()
+            data["updated_at"] = _now()
+            txn.set(ref, data)
+        return public_task(data)
+    return _in_transaction(db, work)
 
 
 def reopen_task(db, uid, task_id):
-    """completed -> in_progress, progress unchanged, completed_on removed. Any other status: 409."""
-    owned = get_owned_task(db, uid, task_id)
-    if owned is None:
-        return None
-    ref, data = owned
-    if data.get("status") != STATUS_COMPLETED:
-        raise ApiError(409, "Only a completed task can be reopened.")
-    data["status"] = STATUS_IN_PROGRESS
-    data.pop("completed_on", None)
-    data["updated_at"] = _now()
-    ref.set(data)
-    return public_task(data)
+    """completed -> in_progress, progress unchanged, completed_on removed. Any other status: 409.
+    A task that has subtasks is reopened only by reopening one of its subtasks: 409."""
+    def work(txn):
+        owned = get_owned_task(db, uid, task_id, txn)
+        if owned is None:
+            return None
+        ref, data = owned
+        if _subtask_list(data):
+            raise ApiError(409, "This task has subtasks. Complete or reopen its subtasks instead.")
+        if data.get("status") != STATUS_COMPLETED:
+            raise ApiError(409, "Only a completed task can be reopened.")
+        data["status"] = STATUS_IN_PROGRESS
+        data.pop("completed_on", None)
+        data["updated_at"] = _now()
+        txn.set(ref, data)
+        return public_task(data)
+    return _in_transaction(db, work)
 
 
 def delete_task(db, uid, task_id):
@@ -333,3 +463,122 @@ def delete_task(db, uid, task_id):
         return False
     owned[0].delete()
     return True
+
+
+# ---- Subtasks (embedded in the parent task document; the server alone decides parent progress and status) ----
+def _recalculate_from_subtasks(data, today):
+    """Derive the parent's progress and status from its subtasks. No subtasks: nothing is touched (manual rules).
+
+    progress_pct = done * 100 / total, rounded half up with integer arithmetic (same formula as the mock engine).
+    All done        -> completed (completed_on = today, kept if it was already completed)
+    Some done       -> in_progress
+    None done       -> not_started stays not_started, in_progress stays in_progress, completed becomes in_progress
+    Leaving "completed" clears completed_on."""
+    items = _subtask_list(data)
+    if not items:
+        return
+    total = len(items)
+    done = sum(1 for item in items if item.get("status") == STATUS_COMPLETED)
+    previous = data.get("status", STATUS_NOT_STARTED)
+    data["progress_pct"] = _percent_done(done, total)
+    if done == total:
+        data["status"] = STATUS_COMPLETED
+        if previous != STATUS_COMPLETED or not data.get("completed_on"):
+            data["completed_on"] = today.isoformat()
+    else:
+        data.pop("completed_on", None)
+        if previous == STATUS_COMPLETED or done > 0:
+            data["status"] = STATUS_IN_PROGRESS
+
+
+def _save_subtasks(txn, ref, data, items, today):
+    data["subtasks"] = items
+    _recalculate_from_subtasks(data, today)
+    _check_parent_matches_subtasks(data)  # final invariant: never persist a parent that disagrees with its subtasks
+    data["updated_at"] = _now()
+    txn.set(ref, data)
+    return public_task(data)
+
+
+def _subtask_not_found():
+    return ApiError(404, "Subtask not found.")
+
+
+def _find_subtask(data, subtask_id):
+    if not valid_id(subtask_id):
+        raise _subtask_not_found()
+    items = list(_subtask_list(data))
+    for index, item in enumerate(items):
+        if item.get("subtask_id") == subtask_id:
+            return items, index
+    raise _subtask_not_found()
+
+
+def add_subtasks(db, uid, task_id, items, today):
+    """Append already-validated subtasks (each {title, estimated_minutes}) in ONE write: all or nothing.
+    Existing subtasks are never replaced. Returns the updated parent task, or None when this student has no such task."""
+    def work(txn):
+        owned = get_owned_task(db, uid, task_id, txn)
+        if owned is None:
+            return None
+        ref, data = owned
+        existing = list(_subtask_list(data))
+        if len(existing) + len(items) > MAX_SUBTASKS:
+            message = f"a task can have at most {MAX_SUBTASKS} subtasks (it already has {len(existing)})."
+            raise ApiError(422, f"subtasks: {message}", errors={"subtasks": message})
+        taken = {item.get("subtask_id") for item in existing if isinstance(item, dict)}
+        created = []
+        for item in items:
+            subtask_id = secrets.token_hex(10)
+            while subtask_id in taken:
+                subtask_id = secrets.token_hex(10)
+            taken.add(subtask_id)
+            created.append({"subtask_id": subtask_id, "title": item["title"],
+                            "estimated_minutes": item["estimated_minutes"], "status": STATUS_NOT_STARTED})
+        return _save_subtasks(txn, ref, data, existing + created, today)
+    return _in_transaction(db, work)
+
+
+def complete_subtask(db, uid, task_id, subtask_id, today):
+    """Marks one subtask completed (already completed: no change). Returns the updated parent, or None (no such task).
+    Raises 404 for a missing subtask."""
+    def work(txn):
+        owned = get_owned_task(db, uid, task_id, txn)
+        if owned is None:
+            return None
+        ref, data = owned
+        items, index = _find_subtask(data, subtask_id)
+        if items[index].get("status") == STATUS_COMPLETED:
+            return public_task(data)
+        items[index] = {**items[index], "status": STATUS_COMPLETED}
+        return _save_subtasks(txn, ref, data, items, today)
+    return _in_transaction(db, work)
+
+
+def reopen_subtask(db, uid, task_id, subtask_id, today):
+    """completed -> not_started. Any other status: 409. A completed parent becomes in_progress (completed_on cleared)."""
+    def work(txn):
+        owned = get_owned_task(db, uid, task_id, txn)
+        if owned is None:
+            return None
+        ref, data = owned
+        items, index = _find_subtask(data, subtask_id)
+        if items[index].get("status") != STATUS_COMPLETED:
+            raise ApiError(409, "Only a completed subtask can be reopened.")
+        items[index] = {**items[index], "status": STATUS_NOT_STARTED}
+        return _save_subtasks(txn, ref, data, items, today)
+    return _in_transaction(db, work)
+
+
+def delete_subtask(db, uid, task_id, subtask_id, today):
+    """Removes one subtask. Remaining subtasks still drive the parent. Deleting the LAST one leaves the parent's
+    progress and status as they were and hands control back to the manual rules. Returns the parent or None."""
+    def work(txn):
+        owned = get_owned_task(db, uid, task_id, txn)
+        if owned is None:
+            return None
+        ref, data = owned
+        items, index = _find_subtask(data, subtask_id)
+        del items[index]
+        return _save_subtasks(txn, ref, data, items, today)
+    return _in_transaction(db, work)

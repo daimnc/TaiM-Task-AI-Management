@@ -1,11 +1,12 @@
 import {api} from '../api/client.js';
-import {load,esc,topOpenTask,dueText,empty,toast,subjectName,today,iso} from '../ui.js';
+import {load,guard,esc,topOpenTask,dueText,empty,toast,subjectName,today,iso} from '../ui.js';
 import {dueWithin} from '../taskStats.js';
 const LABELS={deadline:'Deadline reminders',dailySummary:'Daily study summary',progressCheckin:'Progress check-in',quietHours:'Quiet hours'};
-export default{title:'Smart Reminders',render(el){const go=()=>load(el,()=>Promise.all([api.getTasks(),api.getReminderPrefs(),api.getSettings(),api.getSubjects()]),([tasks,prefs,s,subjects])=>{
+export default{title:'Smart Reminders',render(el){const save=guard(async c=>{try{await api.saveReminderPrefs({[c.dataset.k]:c.checked});toast('Preferences saved');await go()}catch(e){c.checked=!c.checked;toast(e.message,'bad')}},el);
+ const go=()=>load(el,()=>Promise.all([api.getTasks(),api.getReminderPrefs(),api.getSettings(),api.getSubjects()]),([tasks,prefs,s,subjects])=>{
  const pick=topOpenTask(tasks),up=dueWithin(tasks,iso(today()),s.leadDays),mins=s.sessionMinutes,days=`${s.leadDays} day${s.leadDays>1?'s':''}`;
  el.innerHTML=`<div class="page-head"><div><h2>Smart Reminders</h2><p class="sub">Contextual reminders based on urgency and recorded progress.</p></div></div>
  <div class="grid2 even"><div class="card ai"><span class="pill violet">✦ ADAPTIVE SUGGESTION · RULE-BASED</span>${pick?`<h3>Your ${esc(pick.title)} needs attention</h3><p>${dueText(pick.deadline)}. Your recorded progress is ${pick.progress_pct}%. Try a ${mins}-minute session today.</p><a class="btn primary" href="#/planner?task=${encodeURIComponent(pick.task_id)}">Plan a session</a> <a class="btn" href="#/pomodoro?task=${encodeURIComponent(pick.task_id)}">Start focus timer</a>`:'<h3>Nothing needs attention</h3>'}</div>
  <div class="card"><h3>Reminder Preferences</h3>${Object.keys(LABELS).map(k=>`<label class="chk">${LABELS[k]}<input type="checkbox" data-k="${k}"${prefs[k]?' checked':''}></label>`).join('')}<p class="hint">Preferences are saved to your account. TAiM shows reminders on this page only; it does not send push notifications or emails.</p></div></div>
  <div class="card" style="margin-top:18px"><h3>Upcoming Notifications</h3><p class="hint" style="margin:0 0 6px">Open tasks due within ${days}, including overdue ones. Change the lead time in Settings.</p>${!prefs.deadline?empty('Deadline reminders are turned off.'):up.map(t=>`<div class="item"><b>${esc(t.title)} — ${dueText(t.deadline).toLowerCase()}</b><small>${esc(subjectName(subjects,t.subject_id))} · Suggested: work on it for ${mins} minutes.</small></div>`).join('')||empty('No upcoming notifications.')}</div>`;
- el.querySelectorAll('[data-k]').forEach(c=>c.onchange=async()=>{try{await api.saveReminderPrefs({[c.dataset.k]:c.checked});toast('Preferences saved');go()}catch(e){c.checked=!c.checked;toast(e.message,'bad')}})});go()}};
+ el.querySelectorAll('[data-k]').forEach(c=>c.onchange=()=>{if(save.busy){c.checked=!c.checked;return}save(c)})});go()}};

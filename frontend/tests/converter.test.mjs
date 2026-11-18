@@ -225,7 +225,7 @@ const call = (db, method, path, body) => mockV2Request(db, method, path, body, c
 const rejects = (fn, status, pattern) => assert.throws(fn, e => e instanceof MockHttpError && e.status === status && (!pattern || pattern.test(e.message)), `expected ${status}`);
 const fresh = () => { const db = seedV2(); db.tasks = []; db.subjects = []; return db };
 const NEW_TASK = { title: 'Essay', subject_id: '', category: 'assignment', deadline: '2026-11-20', importance: 'high' };
-const TASK_FIELDS = ['task_id', 'subject_id', 'title', 'deadline', 'importance', 'category', 'progress_pct', 'status'];
+const TASK_FIELDS = ['task_id', 'subject_id', 'title', 'deadline', 'importance', 'category', 'progress_pct', 'status', 'subtasks'];
 
 test('engine subjects: create, list sorted, rename, delete; duplicates 422; in-use delete 409; missing 404', () => {
   const db = fresh(), b = call(db, 'POST', '/subjects', { subject_name: '  Biology ' }), a = call(db, 'POST', '/subjects', { subject_name: 'Algebra' });

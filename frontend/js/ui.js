@@ -17,6 +17,11 @@ export const bars=(v,l)=>{const m=Math.max(...v,1);return `<div class="bars">${v
 export function toast(msg,type=''){const t=document.createElement('div');t.className='toast '+type;t.textContent=msg;document.body.append(t);setTimeout(()=>t.remove(),2800)}
 // Loading / error(+retry) wrapper: render(data) is called on success.
 export async function load(el,fn,render){el.innerHTML='<div class="state">Loading…</div>';try{render(await fn())}catch(e){el.innerHTML=`<div class="state err">${esc(e.message)}<br><br><button class="btn" data-r>Retry</button></div>`;$('[data-r]',el).onclick=()=>load(el,fn,render)}}
+// Request lock: the wrapped function runs only when the previous call has finished (success or error). While it is
+// pending, `area` (optional element) is dimmed and made inert so it cannot be clicked again. `run.busy` tells callers.
+export function guard(fn,area){let busy=false;const run=async(...a)=>{if(busy)return;busy=true;if(area){area.classList?.add('locked');area.inert=true}
+ try{return await fn(...a)}finally{busy=false;if(area){area.classList?.remove('locked');area.inert=false}}};
+ Object.defineProperty(run,'busy',{get:()=>busy});return run}
 export function modal(title,body,onSubmit){
  const o=document.createElement('div');o.className='overlay';
  o.innerHTML=`<form class="modal card"><h3>${esc(title)}</h3>${body}<p class="err" hidden></p><div class="row end"><button type="button" class="btn" data-x>Cancel</button><button class="btn primary">Save</button></div></form>`;

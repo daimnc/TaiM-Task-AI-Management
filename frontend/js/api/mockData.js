@@ -27,6 +27,10 @@ export const IMPORTANCE = ['low', 'medium', 'high'];
 export const STATUSES = ['not_started', 'in_progress', 'completed'];
 export const LEAD_DAYS = [1, 2, 3, 5, 7];
 export const SESSION_MINUTES = [25, 45, 60, 90];
+export const MAX_SUBTASKS = 20;
+export const SUBTASK_STATUSES = ['not_started', 'completed'];
+// Parent progress from subtasks: whole numbers, rounded half up with integer maths. MUST match backend/store.py.
+export const percentDone = (done, total) => total ? Math.floor((done * 100 + Math.floor(total / 2)) / total) : 0;
 export const REMINDER_DEFAULTS = { deadline: true, dailySummary: true, progressCheckin: false, quietHours: true };
 export const UNCATEGORIZED = 'Uncategorized';
 const CATEGORY_MAP = { Assignment: 'assignment', Research: 'research', Project: 'project', Examination: 'exam' };
@@ -57,6 +61,7 @@ const dueWords = n => n < 0 ? 'overdue' : n === 0 ? 'due today' : n === 1 ? 'due
 
 // ---- Validation of a stored V2 database. Returns a list of problems (field paths only, never values). ----
 const TASK_KEYS = ['task_id', 'subject_id', 'title', 'deadline', 'importance', 'category', 'progress_pct', 'status'];
+const SUBTASK_KEYS = ['subtask_id', 'title', 'estimated_minutes', 'status'];
 const HISTORY_KEYS = ['completed', 'completionRate', 'onTimeRate', 'weeklyChange', 'weeklyProductivity', 'weeklyCompletion', 'insight'];
 const sameKeys = (o, keys) => Object.keys(o).length === keys.length && keys.every(k => Object.hasOwn(o, k));
 
@@ -67,6 +72,29 @@ function historyProblems(h, label) {
   for (const k of ['completed', 'completionRate', 'onTimeRate', 'weeklyChange']) if (!isNum(h[k])) p.push(`${label}.${k}: must be a number.`);
   for (const [k, n] of [['weeklyProductivity', 7], ['weeklyCompletion', 4]]) if (!Array.isArray(h[k]) || h[k].length !== n || !h[k].every(isNum)) p.push(`${label}.${k}: must be ${n} numbers.`);
   if (typeof h.insight !== 'string') p.push(`${label}.insight: must be text.`);
+  return p;
+}
+
+function subtaskProblems(t, at) {
+  const p = [], items = t.subtasks;
+  if (!Array.isArray(items) || items.length > MAX_SUBTASKS) return [`${at}.subtasks: must be a list of at most ${MAX_SUBTASKS}.`];
+  const ids = new Set();
+  items.forEach((s, i) => {
+    const sat = `${at}.subtasks[${i}]`;
+    if (!isObj(s) || !sameKeys(s, SUBTASK_KEYS)) return p.push(`${sat}: must have exactly these fields: ${SUBTASK_KEYS.join(', ')}.`);
+    if (typeof s.subtask_id !== 'string' || !ID_RE.test(s.subtask_id)) p.push(`${sat}.subtask_id: not a valid id.`);
+    else if (ids.has(s.subtask_id)) p.push(`${sat}.subtask_id: duplicate id.`); else ids.add(s.subtask_id);
+    if (typeof s.title !== 'string' || !s.title.trim() || s.title.length > 120 || s.title !== s.title.trim()) p.push(`${sat}.title: must be 1-120 characters of trimmed text.`);
+    if (!Number.isSafeInteger(s.estimated_minutes) || s.estimated_minutes < 1) p.push(`${sat}.estimated_minutes: must be a whole number of minutes, at least 1 (at most ${Number.MAX_SAFE_INTEGER}).`);
+    if (!SUBTASK_STATUSES.includes(s.status)) p.push(`${sat}.status: not an allowed value.`);
+  });
+  // While subtasks exist they alone decide the parent's progress and status.
+  if (!p.length && items.length) {
+    const done = items.filter(s => s.status === 'completed').length;
+    if (typeof t.progress_pct !== 'number' || t.progress_pct !== percentDone(done, items.length)) p.push(`${at}.progress_pct: does not match its subtasks.`);
+    const okStatus = done === items.length ? ['completed'] : done ? ['in_progress'] : ['not_started', 'in_progress'];
+    if (!okStatus.includes(t.status)) p.push(`${at}.status: does not match its subtasks.`);
+  }
   return p;
 }
 
@@ -101,7 +129,9 @@ export function validateV2Db(db) {
   if (!Array.isArray(db.tasks)) p.push('tasks: must be a list.');
   else db.tasks.forEach((t, i) => {
     const at = `tasks[${i}]`;
-    if (!isObj(t) || !sameKeys(t, TASK_KEYS)) return p.push(`${at}: must have exactly these fields: ${TASK_KEYS.join(', ')}.`);
+    // `subtasks` is optional: tasks saved before subtasks existed have no such field.
+    const keys = isObj(t) && Object.hasOwn(t, 'subtasks') ? [...TASK_KEYS, 'subtasks'] : TASK_KEYS;
+    if (!isObj(t) || !sameKeys(t, keys)) return p.push(`${at}: must have exactly these fields: ${TASK_KEYS.join(', ')} (and optionally subtasks).`);
     if (typeof t.task_id !== 'string' || !ID_RE.test(t.task_id)) p.push(`${at}.task_id: not a valid id.`);
     else if (taskIds.has(t.task_id)) p.push(`${at}.task_id: duplicate id.`); else taskIds.add(t.task_id);
     if (!subjectIds.has(t.subject_id)) p.push(`${at}.subject_id: does not match any subject.`);
@@ -114,6 +144,7 @@ export function validateV2Db(db) {
     // The only coupling the backend enforces: a completed task is at 100%. Reopened tasks (in_progress at 100) and
     // not_started tasks with progress are legitimate, because editing progress never changes status.
     else if (t.status === 'completed' && t.progress_pct !== 100) p.push(`${at}: a completed task must be at 100%.`);
+    if (Object.hasOwn(t, 'subtasks')) p.push(...subtaskProblems(t, at));
   });
   return p;
 }
@@ -281,7 +312,9 @@ export function startV2WithDemoData(storage) {
 // ---- Mock V2 request engine: imitates the Phase 1 API (same paths, field names, status codes, error text). ----
 // Used only by mock mode. Real mode talks to the real backend. Every handler validates BEFORE it changes anything,
 // so a rejected request never leaves the database half-changed.
-const publicTask = t => ({ task_id: t.task_id, subject_id: t.subject_id, title: t.title, deadline: t.deadline, importance: t.importance, category: t.category, progress_pct: t.progress_pct, status: t.status });
+const publicSubtask = s => ({ subtask_id: s.subtask_id, title: s.title, estimated_minutes: s.estimated_minutes, status: s.status });
+const publicTask = t => ({ task_id: t.task_id, subject_id: t.subject_id, title: t.title, deadline: t.deadline, importance: t.importance, category: t.category, progress_pct: t.progress_pct, status: t.status, subtasks: (Array.isArray(t.subtasks) ? t.subtasks : []).map(publicSubtask) });
+const hasSubtasks = t => Array.isArray(t.subtasks) && t.subtasks.length > 0;
 const publicSubject = s => ({ subject_id: s.subject_id, subject_name: s.subject_name });
 const fail = errors => {
   if (Object.keys(errors).length) throw new MockHttpError(422, Object.entries(errors).map(([f, m]) => `${f}: ${m}`).join('; '), errors);
@@ -309,6 +342,9 @@ const TASK_RULES = { title: [rule.text(120), true], subject_id: [rule.id, true],
 const TASK_UPDATE_RULES = { ...TASK_RULES, progress_pct: [rule.progress, false] };
 const CREATE_FORBIDDEN = { status: 'is set by the server: new tasks start as not_started.', progress_pct: 'is set by the server: new tasks start at 0.' };
 const UPDATE_FORBIDDEN = { status: 'cannot be changed here. Use the start, complete or reopen actions.' };
+const MINUTES_RULE = v => { if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 1) throw new Error(`must be a whole number of minutes, at least 1 (at most ${Number.MAX_SAFE_INTEGER}).`); return v };
+const SUBTASK_RULES = { title: [rule.text(120), true], estimated_minutes: [MINUTES_RULE, false, 30] };
+const SUBTASK_FORBIDDEN = { subtask_id: 'is set by the server.', status: 'is set by the server: new subtasks start as not_started.' };
 const SETTINGS_RULES = { full_name: [rule.text(80), false], leadDays: [rule.oneOf(LEAD_DAYS), false], sessionMinutes: [rule.oneOf(SESSION_MINUTES), false] };
 const REMINDER_RULES = Object.fromEntries(Object.keys(REMINDER_DEFAULTS).map(k => [k, [rule.bool, false]]));
 const PLAN_RULES = { title: [rule.text(120), true], requirements: [rule.text(2000, true), false, ''], deadline: [rule.date, true], hoursPerDay: [rule.hours, false, 1] };
@@ -328,8 +364,36 @@ const notFound = what => new MockHttpError(404, `${what} not found.`);
 const dupName = () => new MockHttpError(422, 'subject_name: you already have a subject with that name.', { subject_name: 'you already have a subject with that name.' });
 const mustOwnSubject = (db, id) => { if (!db.subjects.some(s => s.subject_id === id)) throw new MockHttpError(422, 'subject_id: must be one of your subjects.', { subject_id: 'must be one of your subjects.' }) };
 const nameTaken = (db, name, exceptId) => db.subjects.some(s => s.subject_id !== exceptId && normalizeName(s.subject_name) === normalizeName(name));
+// Validates a whole {subtasks:[...]} request BEFORE anything is saved; every problem is reported at once.
+function validateSubtaskBatch(body) {
+  const items = body.subtasks;
+  if (!Array.isArray(items) || !items.length) fail({ subtasks: 'must be a non-empty list.' });
+  if (items.length > MAX_SUBTASKS) fail({ subtasks: `at most ${MAX_SUBTASKS} subtasks can be added at once.` });
+  const clean = [], errors = {};
+  items.forEach((item, i) => {
+    const at = `subtasks[${i}]`;
+    if (!isObj(item)) { errors[at] = 'must be an object.'; return }
+    for (const [k, m] of Object.entries(SUBTASK_FORBIDDEN)) if (Object.hasOwn(item, k)) errors[`${at}.${k}`] = m;
+    const f = {};
+    for (const [name, [check, required, fallback]] of Object.entries(SUBTASK_RULES)) {
+      if (Object.hasOwn(item, name)) { try { f[name] = check(item[name]) } catch (e) { errors[`${at}.${name}`] = e.message } }
+      else if (required) errors[`${at}.${name}`] = 'is required.'; else f[name] = fallback;
+    }
+    clean.push(f);
+  });
+  fail(errors); return clean;
+}
+// Parent progress/status from its subtasks (mirrors backend/store.py _recalculate_from_subtasks). No subtasks: untouched.
+function recalcFromSubtasks(t) {
+  if (!hasSubtasks(t)) return;
+  const total = t.subtasks.length, done = t.subtasks.filter(s => s.status === 'completed').length, prev = t.status;
+  t.progress_pct = percentDone(done, total);
+  if (done === total) t.status = 'completed'; else if (prev === 'completed' || done > 0) t.status = 'in_progress';
+}
+const subtaskNotFound = () => new MockHttpError(404, 'Subtask not found.');
+const findSubtask = (t, id) => { const s = ID_RE.test(id) && Array.isArray(t.subtasks) ? t.subtasks.find(x => x.subtask_id === id) : undefined; if (!s) throw subtaskNotFound(); return s };
 function makeId(db, prefix, ctx) {
-  const used = new Set([...db.subjects.map(s => s.subject_id), ...db.tasks.map(t => t.task_id)]);
+  const used = new Set([...db.subjects.map(s => s.subject_id), ...db.tasks.map(t => t.task_id), ...db.tasks.flatMap(t => (t.subtasks || []).map(s => s.subtask_id))]);
   for (let i = 0; i < 1000; i++) { const id = ctx.newId ? ctx.newId(prefix) : prefix + Math.random().toString(36).slice(2, 10); if (!used.has(id) && ID_RE.test(id)) return id }
   throw new Error('could not create a unique id');
 }
@@ -344,6 +408,31 @@ const MOCK_LABEL = { mock: true, aiGenerated: false, source: 'mock-client' };
 
 export function mockV2Request(db, method, path, body, ctx = {}) {
   const today = ctx.todayIso || new Date().toISOString().slice(0, 10);
+  const sm = path.match(/^\/tasks\/([^/]+)\/subtasks(?:\/([^/]+)(?:\/(complete|reopen))?)?$/);
+  if (sm) {
+    const [, taskId, subId, act] = sm;
+    if (!subId && method === 'POST') {
+      const items = validateSubtaskBatch(readObj(body)), t = findTask(db, taskId); if (!t) throw notFound('Task');
+      const existing = Array.isArray(t.subtasks) ? t.subtasks : [];
+      if (existing.length + items.length > MAX_SUBTASKS) { const msg = `a task can have at most ${MAX_SUBTASKS} subtasks (it already has ${existing.length}).`; throw new MockHttpError(422, `subtasks: ${msg}`, { subtasks: msg }) }
+      t.subtasks = [...existing];
+      for (const it of items) t.subtasks.push({ subtask_id: makeId(db, 'st_', ctx), title: it.title, estimated_minutes: it.estimated_minutes, status: 'not_started' });
+      recalcFromSubtasks(t); return publicTask(t);
+    }
+    if (subId && method === 'POST' && act) {
+      const t = findTask(db, taskId); if (!t) throw notFound('Task');
+      const s = findSubtask(t, subId);
+      if (act === 'complete') s.status = 'completed';
+      else { if (s.status !== 'completed') throw new MockHttpError(409, 'Only a completed subtask can be reopened.'); s.status = 'not_started' }
+      recalcFromSubtasks(t); return publicTask(t);
+    }
+    if (subId && !act && method === 'DELETE') {
+      const t = findTask(db, taskId); if (!t) throw notFound('Task');
+      const s = findSubtask(t, subId); t.subtasks.splice(t.subtasks.indexOf(s), 1);
+      recalcFromSubtasks(t); return publicTask(t); // deleting the last one leaves progress/status as they were (manual rules again)
+    }
+    throw new MockHttpError(405, 'Method not allowed.');
+  }
   const m = path.match(/^\/(subjects|tasks)(?:\/([^/]+?))?(?:\/(start|complete|reopen))?$/);
   if (m) {
     const [, resource, id, action] = m;
@@ -373,6 +462,7 @@ export function mockV2Request(db, method, path, body, ctx = {}) {
       if (id && !action && method === 'PATCH') {
         const b = readObj(body); rejectFields(b, UPDATE_FORBIDDEN); const f = validateBody(b, TASK_UPDATE_RULES, true), t = findTask(db, id); if (!t) throw notFound('Task');
         if (Object.hasOwn(f, 'subject_id')) mustOwnSubject(db, f.subject_id);
+        if (Object.hasOwn(f, 'progress_pct') && hasSubtasks(t)) { const msg = 'is calculated from the subtasks of this task and cannot be set directly.'; throw new MockHttpError(422, `progress_pct: ${msg}`, { progress_pct: msg }) }
         if (Object.hasOwn(f, 'progress_pct') && t.status === 'completed' && f.progress_pct < 100) {
           const msg = 'a completed task stays at 100%. Reopen the task before lowering its progress.'; throw new MockHttpError(422, `progress_pct: ${msg}`, { progress_pct: msg });
         }
@@ -381,6 +471,7 @@ export function mockV2Request(db, method, path, body, ctx = {}) {
       if (id && !action && method === 'DELETE') { const t = findTask(db, id); if (!t) throw notFound('Task'); db.tasks.splice(db.tasks.indexOf(t), 1); return null }
       if (id && action && method === 'POST') {
         const t = findTask(db, id); if (!t) throw notFound('Task');
+        if (action !== 'start' && hasSubtasks(t)) throw new MockHttpError(409, 'This task has subtasks. Complete or reopen its subtasks instead.');
         if (action === 'start') {
           if (t.status === 'completed') throw new MockHttpError(409, 'This task is completed. Use reopen to work on it again.');
           if (t.status === 'not_started') t.status = 'in_progress';

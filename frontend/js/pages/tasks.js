@@ -1,5 +1,5 @@
 import {api} from '../api/client.js';
-import {$,load,esc,fmtDate,sortByDue,empty,toast,today,iso,categoryLabel,importancePill,statusPill,subjectName,isCompleted,CATEGORY_LABELS} from '../ui.js';
+import {$,load,guard,esc,fmtDate,sortByDue,empty,toast,today,iso,categoryLabel,importancePill,statusPill,subjectName,isCompleted,CATEGORY_LABELS} from '../ui.js';
 import {taskModal} from '../components/taskModal.js';
 import {isOverdue} from '../taskStats.js';
 const btn=(a,id,label,cls='')=>`<button class="lnk ${cls}" data-a="${a}" data-id="${esc(id)}">${label}</button>`;
@@ -14,7 +14,7 @@ export default{title:'My Tasks',render(el){
   const r=sortByDue(tasks).filter(t=>(!q||(t.title+' '+subjectName(subjects,t.subject_id)).toLowerCase().includes(q))&&(!c||t.category===c)&&(!s||(s==='active'?!isCompleted(t):t.status===s)));
   list.innerHTML=r.length?`<table><thead><tr><th>TASK</th><th>CATEGORY</th><th>DEADLINE</th><th>IMPORTANCE</th><th>STATUS</th><th>PROGRESS</th><th></th></tr></thead><tbody>${r.map(t=>row(t,td)).join('')}</tbody></table>`:empty(tasks.length?'No tasks match your filters.':'No tasks yet. Click "+ Add Task" to create one.')};
  const refresh=()=>load(list,()=>Promise.all([api.getTasks(),api.getSubjects()]),([t,s])=>{tasks=t;subjects=s;draw()});
- const act=async(fn,msg)=>{try{await fn();if(msg)toast(msg);refresh()}catch(e){toast(e.message,'bad')}};
+ const act=guard(async(fn,msg)=>{try{await fn();if(msg)toast(msg);await refresh()}catch(e){toast(e.message,'bad')}},list);
  ['q','cat','st'].forEach(i=>$('#'+i,el).oninput=draw);
  $('#add',el).onclick=()=>taskModal(null,refresh);
  list.onclick=e=>{const b=e.target.closest('[data-a]');if(!b)return;const t=tasks.find(x=>x.task_id===b.dataset.id);if(!t)return;const a=b.dataset.a;

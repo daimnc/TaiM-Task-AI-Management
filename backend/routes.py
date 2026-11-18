@@ -15,7 +15,7 @@ from progress import build_progress
 from security import require_auth
 from validation import (CHAT_RULES, PLAN_RULES, REMINDER_RULES, SETTINGS_RULES, SUBJECT_RULES, TASK_CREATE_FORBIDDEN,
                         TASK_RULES, TASK_UPDATE_FORBIDDEN, TASK_UPDATE_RULES, read_json_object, reject_fields,
-                        validate)
+                        validate, validate_subtask_batch)
 
 api = Blueprint("api", __name__, url_prefix="/api")
 
@@ -130,6 +130,36 @@ def reopen_task(task_id):
 def delete_task(task_id):
     _or_404(store.delete_task(_db(), g.uid, task_id) or None, "Task")
     return "", 204
+
+
+# ---- Subtasks (embedded in the parent task; every route answers with the updated PARENT task) ----
+@api.post("/tasks/<task_id>/subtasks")
+@require_auth
+@require_v2
+def add_subtasks(task_id):
+    items = validate_subtask_batch(read_json_object())  # the whole batch is checked before anything is saved
+    return jsonify(_or_404(store.add_subtasks(_db(), g.uid, task_id, items, dates.today()), "Task")), 201
+
+
+@api.post("/tasks/<task_id>/subtasks/<subtask_id>/complete")
+@require_auth
+@require_v2
+def complete_subtask(task_id, subtask_id):
+    return jsonify(_or_404(store.complete_subtask(_db(), g.uid, task_id, subtask_id, dates.today()), "Task"))
+
+
+@api.post("/tasks/<task_id>/subtasks/<subtask_id>/reopen")
+@require_auth
+@require_v2
+def reopen_subtask(task_id, subtask_id):
+    return jsonify(_or_404(store.reopen_subtask(_db(), g.uid, task_id, subtask_id, dates.today()), "Task"))
+
+
+@api.delete("/tasks/<task_id>/subtasks/<subtask_id>")
+@require_auth
+@require_v2
+def delete_subtask(task_id, subtask_id):
+    return jsonify(_or_404(store.delete_subtask(_db(), g.uid, task_id, subtask_id, dates.today()), "Task"))
 
 
 # ---- Settings (stored on the student document) ----

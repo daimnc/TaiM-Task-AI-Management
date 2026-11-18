@@ -128,6 +128,31 @@ TASK_UPDATE_FORBIDDEN = {
     "status": "cannot be changed here. Use the start, complete or reopen actions.",
 }
 
+# ---- Subtasks (embedded in the parent task document) ----
+MAX_SUBTASKS = 20  # per parent task, counting the ones already saved
+SUBTASK_STATUSES = (STATUS_NOT_STARTED, STATUS_COMPLETED)
+
+
+MAX_SAFE_INTEGER = 9007199254740991  # JavaScript's Number.MAX_SAFE_INTEGER: a technical limit, not a workload limit
+
+
+def _minutes(value):
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_SAFE_INTEGER:
+        raise ValueError(f"must be a whole number of minutes, at least 1 (at most {MAX_SAFE_INTEGER}).")
+    return value
+
+
+# estimated_minutes is optional (default 30). subtask_id and status are server-owned. Other unknown fields
+# (for example a due date) are ignored and never stored.
+SUBTASK_RULES = {
+    "title": (_text(120), True, None),
+    "estimated_minutes": (_minutes, False, 30),
+}
+SUBTASK_FORBIDDEN = {
+    "subtask_id": "is set by the server.",
+    "status": "is set by the server: new subtasks start as not_started.",
+}
+
 SETTINGS_RULES = {
     "full_name": (_text(80), False, None),
     "leadDays": (_one_of(LEAD_DAYS), False, None),
@@ -180,6 +205,40 @@ def validate(body, rules, partial=False):
                 clean[name] = default
     if partial and not clean and not errors:
         errors["body"] = "send at least one of: " + ", ".join(rules) + "."
+    if errors:
+        fail(errors)
+    return clean
+
+
+def validate_subtask_batch(body):
+    """Validate a whole {"subtasks": [...]} request BEFORE anything is saved. Returns the cleaned list.
+    Every problem in every item is reported at once, keyed like "subtasks[2].title"."""
+    items = body.get("subtasks")
+    if not isinstance(items, list) or not items:
+        fail({"subtasks": "must be a non-empty list."})
+    if len(items) > MAX_SUBTASKS:
+        fail({"subtasks": f"at most {MAX_SUBTASKS} subtasks can be added at once."})
+    clean, errors = [], {}
+    for index, item in enumerate(items):
+        at = f"subtasks[{index}]"
+        if not isinstance(item, dict):
+            errors[at] = "must be an object."
+            continue
+        for name, message in SUBTASK_FORBIDDEN.items():
+            if name in item:
+                errors[f"{at}.{name}"] = message
+        fields = {}
+        for name, (rule, required, default) in SUBTASK_RULES.items():
+            if name in item:
+                try:
+                    fields[name] = rule(item[name])
+                except ValueError as problem:
+                    errors[f"{at}.{name}"] = str(problem)
+            elif required:
+                errors[f"{at}.{name}"] = "is required."
+            else:
+                fields[name] = default
+        clean.append(fields)
     if errors:
         fail(errors)
     return clean

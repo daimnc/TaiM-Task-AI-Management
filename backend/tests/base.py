@@ -16,7 +16,7 @@ from fakes import FakeFirestore, fake_verifier  # noqa: E402
 
 TODAY = date(2026, 11, 16)  # a Monday
 TASK = {"title": "Programming Activity 05", "category": "assignment", "deadline": "2026-11-20", "importance": "high"}
-TASK_FIELDS = {"task_id", "subject_id", "title", "deadline", "importance", "category", "progress_pct", "status"}
+TASK_FIELDS = {"task_id", "subject_id", "title", "deadline", "importance", "category", "progress_pct", "status", "subtasks"}
 
 
 class ApiTestCase(unittest.TestCase):

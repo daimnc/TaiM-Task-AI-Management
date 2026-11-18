@@ -14,6 +14,8 @@ GATED = [
     ("GET", "/api/subjects"), ("POST", "/api/subjects"), ("PATCH", "/api/subjects/abc"), ("DELETE", "/api/subjects/abc"),
     ("GET", "/api/tasks"), ("POST", "/api/tasks"), ("PATCH", "/api/tasks/abc"), ("DELETE", "/api/tasks/abc"),
     ("POST", "/api/tasks/abc/start"), ("POST", "/api/tasks/abc/complete"), ("POST", "/api/tasks/abc/reopen"),
+    ("POST", "/api/tasks/abc/subtasks"), ("POST", "/api/tasks/abc/subtasks/xyz/complete"),
+    ("POST", "/api/tasks/abc/subtasks/xyz/reopen"), ("DELETE", "/api/tasks/abc/subtasks/xyz"),
     ("GET", "/api/settings"), ("PUT", "/api/settings"),
     ("GET", "/api/reminders/preferences"), ("PUT", "/api/reminders/preferences"),
     ("GET", "/api/progress"), ("POST", "/api/ai/chat"),

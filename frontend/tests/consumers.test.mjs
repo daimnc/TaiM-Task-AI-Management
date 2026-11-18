@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { seedV2, mockV2Request, MockHttpError } from '../js/api/mockData.js';
-import { statusPill, statusLabel, subjectName, cleanName } from '../js/ui.js';
+import { statusPill, statusLabel, subjectName, cleanName, guard } from '../js/ui.js';
 import { isOverdue, isDueSoon, taskCounts, daysBetween } from '../js/taskStats.js';
 
 let n = 0; const ctx = { todayIso: '2026-11-18', newId: p => `${p}c${++n}` };
@@ -119,4 +119,37 @@ test('navigation: Subjects route and sidebar entry exist; pages use V2 ids and a
 
 test('safety: MOCK_V2 is still false and no V2 switch was added', () => {
   assert.match(src('api/client.js'), /^const MOCK_V2 = false;/m);
+});
+
+// ---- Stage A: request lock ----
+const area = () => ({ inert: false, classList: { s: new Set(), add(c) { this.s.add(c) }, remove(c) { this.s.delete(c) } } });
+const later = () => { let done; const p = new Promise(r => { done = r }); return { p, done } };
+
+test('guard: a second call is ignored while one is pending, and the area is locked meanwhile', async () => {
+  const a = area(), gate = later(); let runs = 0;
+  const run = guard(async () => { runs++; await gate.p; return 'ok' }, a);
+  const first = run(); assert.equal(run.busy, true); assert.equal(a.inert, true); assert.ok(a.classList.s.has('locked'));
+  assert.equal(await run(), undefined); assert.equal(runs, 1);
+  gate.done(); assert.equal(await first, 'ok'); assert.equal(runs, 1);
+});
+
+test('guard: the lock is released after a success', async () => {
+  const a = area(); let runs = 0; const run = guard(async () => { runs++ }, a);
+  await run(); assert.equal(run.busy, false); assert.equal(a.inert, false); assert.equal(a.classList.s.has('locked'), false);
+  await run(); assert.equal(runs, 2);
+});
+
+test('guard: the lock is released after an error, which still reaches the caller', async () => {
+  const a = area(); let runs = 0; const run = guard(async () => { runs++; throw new Error('boom') }, a);
+  await assert.rejects(run(), /boom/); assert.equal(run.busy, false); assert.equal(a.inert, false);
+  await assert.rejects(run(), /boom/); assert.equal(runs, 2);
+});
+
+test('guard works without an area element', async () => { const run = guard(async x => x * 2); assert.equal(await run(4), 8); assert.equal(run.busy, false) });
+
+test('Tasks, Subjects and Reminders use guard for their unprotected actions', () => {
+  for (const f of ['pages/tasks.js', 'pages/subjects.js', 'pages/reminders.js']) assert.match(src(f), /import \{[^}]*\bguard\b[^}]*\} from '\.\.\/ui\.js'/, f);
+  assert.match(src('pages/tasks.js'), /const act=guard\(/);
+  assert.match(src('pages/subjects.js'), /const remove=guard\(/);
+  assert.match(src('pages/reminders.js'), /const save=guard\(/);
 });
