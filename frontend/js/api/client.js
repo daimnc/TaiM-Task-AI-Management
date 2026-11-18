@@ -85,7 +85,7 @@ async function mock(method, path, body) {
 // ---- Mock database v2 (Phase 3). DORMANT: keep MOCK_V2 = false until every page uses the v2 data shapes (Batch 3.2). ----
 // While false, mockV2 is never called, so no taim_mock_db_v2 or backup key is ever created and the legacy mock above is used.
 // When true (mock mode only), the first request loads/converts the data via bootstrapMockV2 (see mockData.js).
-const MOCK_V2 = true; let v2db = null;
+const MOCK_V2 = false; let v2db = null;
 
 async function mockV2(method, path, body) {
   await new Promise(r => setTimeout(r, 250));
