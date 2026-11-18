@@ -2,7 +2,7 @@
 // No browser, no network. Pages that need a DOM are covered by static checks here plus the manual browser checklist.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { seedV2, mockV2Request, MockHttpError } from '../js/api/mockData.js';
 import { statusPill, statusLabel, subjectName, cleanName, guard } from '../js/ui.js';
 import { isOverdue, isDueSoon, taskCounts, daysBetween } from '../js/taskStats.js';
@@ -152,4 +152,44 @@ test('Tasks, Subjects and Reminders use guard for their unprotected actions', ()
   assert.match(src('pages/tasks.js'), /const act=guard\(/);
   assert.match(src('pages/subjects.js'), /const remove=guard\(/);
   assert.match(src('pages/reminders.js'), /const save=guard\(/);
+});
+
+// ---- Stage B: static checks (pages need a DOM, so their wiring is checked in the source) ----
+test('B client: four subtask methods use the right verbs and paths, and encode ids', () => {
+  const c = src('api/client.js');
+  assert.match(c, /addSubtasks: \(id, b\) => req\('POST', '\/tasks\/' \+ encodeURIComponent\(id\) \+ '\/subtasks', b\)/);
+  assert.match(c, /completeSubtask: \(id, sid\) => req\('POST', '\/tasks\/' \+ encodeURIComponent\(id\) \+ '\/subtasks\/' \+ encodeURIComponent\(sid\) \+ '\/complete'\)/);
+  assert.match(c, /reopenSubtask: \(id, sid\) => req\('POST', '\/tasks\/' \+ encodeURIComponent\(id\) \+ '\/subtasks\/' \+ encodeURIComponent\(sid\) \+ '\/reopen'\)/);
+  assert.match(c, /deleteSubtask: \(id, sid\) => req\('DELETE', '\/tasks\/' \+ encodeURIComponent\(id\) \+ '\/subtasks\/' \+ encodeURIComponent\(sid\)\)/);
+});
+
+test('B pages and components never call fetch; they go through the api client', () => {
+  for (const dir of ['pages', 'components']) for (const f of readdirSync(new URL('../js/' + dir, import.meta.url)).filter(x => x.endsWith('.js'))) assert.doesNotMatch(src(`${dir}/${f}`), /\bfetch\s*\(/, `${dir}/${f}`);
+  assert.match(src('pages/planner.js'), /import \{api\} from '\.\.\/api\/client\.js'/);
+});
+
+test('B planner: only appends subtasks to an existing parent; no new tasks or subjects, no category/importance/subject fields, no dates shown', () => {
+  const p = src('pages/planner.js');
+  assert.match(p, /api\.getTasks\(\)/); assert.match(p, /api\.planTask\(/); assert.match(p, /api\.addSubtasks\(p\.task_id,\{subtasks:items\}\)/);
+  assert.doesNotMatch(p, /createTask|createSubject|getSubjects|updateTask|joinTitle|addSequentially|new_subject|subject_id|name="category"|name="importance"/);
+  assert.doesNotMatch(p, /dueDate|fmtDate\(s\./); assert.match(p, /q\.get\('task'\)/); // deep link ?task=ID preselects the parent
+  assert.match(p, /planStepsToSubtasks/); assert.match(p, /const add=guard\(/); assert.match(p, /const gen=guard\(/);
+  assert.match(p, /addingReopens\(p\)&&!confirm\(/); assert.match(p, /subtaskCapacity/); assert.match(p, /add\.disabled=!n\|\|n>cap/);
+  assert.match(p, /TEMPLATE PLAN · NO AI MODEL USED/); assert.match(p, /href="#\/tasks"/); // empty state points to My Tasks
+});
+
+test('B My Tasks: subtask rows with Complete / Reopen / Delete (confirmed), one lock, local replace; Done and Reopen hidden for parents with subtasks', () => {
+  const t = src('pages/tasks.js');
+  assert.match(t, /api\.completeSubtask/); assert.match(t, /api\.reopenSubtask/); assert.match(t, /api\.deleteSubtask/);
+  assert.match(t, /a==='sub-del'&&confirm\(/); assert.match(t, /const act=guard\(/); assert.equal((t.match(/guard\(/g) || []).length, 1, 'a single lock for every list action');
+  assert.match(t, /stateBtns=t=>hasSubtasks\(t\)\?\(t\.status==='not_started'\?btn\('start'[^:]*:''\):t\.status==='completed'/);
+  assert.match(t, /tasks=tasks\.map\(x=>x\.task_id===r\.task_id\?r:x\);draw\(\)/); assert.match(t, /Progress is calculated from subtasks/);
+  assert.match(t, /OK\.subComplete,true\)/); assert.match(t, /OK\.subReopen,true\)/); assert.match(t, /OK\.subDel,true\)/);
+  assert.doesNotMatch(t, /\.course\b|\bpriority\b|isDone|\bt\.id\b|\.progress\b/);
+});
+
+test('B task modal: progress slider is disabled for a task with subtasks, with an explanation', () => {
+  const m = src('components/taskModal.js');
+  assert.match(m, /import \{hasSubtasks\} from '\.\.\/taskStats\.js'/); assert.match(m, /fromSubs=!!task&&hasSubtasks\(task\)/); assert.match(m, /locked=!!task&&\(isCompleted\(task\)\|\|fromSubs\)/);
+  assert.match(m, /calculated from this task/); assert.match(m, /if\(fd\.has\('progress_pct'\)\)/); // a disabled input is not in the form data, so it is never sent
 });

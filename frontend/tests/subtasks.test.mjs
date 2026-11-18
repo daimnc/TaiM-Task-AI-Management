@@ -3,6 +3,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { seedV2, convertLegacyDb, seed, validateV2Db, bootstrapMockV2, mockV2Request, MockHttpError, KEYS, percentDone, MAX_SUBTASKS } from '../js/api/mockData.js';
+import { guard } from '../js/ui.js';
+import { hasSubtasks, subtaskCounts, subtaskCapacity, planStepsToSubtasks, addingReopens, MAX_SUBTASKS as UI_MAX } from '../js/taskStats.js';
 
 let n = 0; const ctx = { todayIso: '2026-11-16', newId: p => `${p}s${++n}` };
 const call = (db, m, p, b) => mockV2Request(db, m, p, b, ctx);
@@ -257,4 +259,109 @@ test('recalculation: after every add / complete / reopen / delete the parent alw
   assert.equal(get(db, id).status, 'completed'); addSubs(db, id, ['late']);
   assert.deepEqual([get(db, id).status, get(db, id).progress_pct], ['in_progress', 67]); assert.deepEqual(validateV2Db(db), []);
   sub(db, id, 'delete', get(db, id).subtasks[2].subtask_id); assert.equal(get(db, id).status, 'completed'); assert.deepEqual(validateV2Db(db), []);
+});
+
+// ================= Stage B: planner and My Tasks use subtasks (frontend helpers + the same mock engine the API client calls) =================
+// `pageApi` mirrors the api-client methods the pages call (same verbs and paths; consumers.test.mjs checks client.js statically) and counts requests.
+const pageApi = db => {
+  const sent = [], run = (m, p, b) => { sent.push(`${m} ${p}`); return new Promise(r => setTimeout(r, 5)).then(() => call(db, m, p, b)) };
+  return { sent, api: {
+    addSubtasks: (id, b) => run('POST', `/tasks/${id}/subtasks`, b), completeSubtask: (id, sid) => run('POST', `/tasks/${id}/subtasks/${sid}/complete`),
+    reopenSubtask: (id, sid) => run('POST', `/tasks/${id}/subtasks/${sid}/reopen`), deleteSubtask: (id, sid) => run('DELETE', `/tasks/${id}/subtasks/${sid}`),
+    completeTask: id => run('POST', `/tasks/${id}/complete`), getTasks: () => run('GET', '/tasks'), planTask: b => run('POST', '/ai/plan', b) } };
+};
+const replaceLocal = (list, parent) => list.map(t => t.task_id === parent.task_id ? parent : t); // what tasks.js / planner.js do with a response
+const PLAN = [{ title: 'Define scope and outline', dueDate: '2026-11-18', minutes: 60 }, { title: 'Gather and review sources', dueDate: '2026-11-19', minutes: 5400 }, { title: 'Draft main sections', dueDate: '2026-11-20', minutes: 60 }];
+
+test('B helpers: records without a subtasks field (older data) count as having no subtasks', () => {
+  for (const t of [{}, { subtasks: undefined }, { subtasks: null }, { subtasks: 'x' }, { subtasks: [] }, null, undefined]) {
+    assert.equal(hasSubtasks(t), false); assert.deepEqual(subtaskCounts(t), { total: 0, done: 0 }); assert.equal(subtaskCapacity(t), UI_MAX);
+  }
+  const t = { subtasks: [{ status: 'completed' }, { status: 'not_started' }, { status: 'completed' }] };
+  assert.equal(hasSubtasks(t), true); assert.deepEqual(subtaskCounts(t), { total: 3, done: 2 }); assert.equal(subtaskCapacity(t), UI_MAX - 3);
+  assert.equal(UI_MAX, MAX_SUBTASKS, 'frontend limit equals the engine (and backend) limit'); assert.equal(subtaskCapacity({ subtasks: Array(25).fill({}) }), 0);
+});
+
+test('B planner mapping: only the ticked steps are sent, minutes become estimated_minutes, dates are dropped, no other fields', () => {
+  const items = planStepsToSubtasks(PLAN, [2, 0]);
+  assert.deepEqual(items, [{ title: 'Draft main sections', estimated_minutes: 60 }, { title: 'Define scope and outline', estimated_minutes: 60 }]);
+  for (const i of items) assert.deepEqual(Object.keys(i), ['title', 'estimated_minutes']);
+  assert.deepEqual(planStepsToSubtasks(PLAN, [1]), [{ title: 'Gather and review sources', estimated_minutes: 5400 }]); // above 1440 is valid
+  assert.deepEqual(planStepsToSubtasks(PLAN, []), []); assert.deepEqual(planStepsToSubtasks(PLAN, [7, -1]), []); assert.deepEqual(planStepsToSubtasks(null, [0]), []);
+  const odd = planStepsToSubtasks([{ title: '  Spaced   out  ', minutes: 12.6 }, { title: 'x'.repeat(200), minutes: 0 }, { title: 'No minutes' }, { title: 'NaN', minutes: 'abc' }, { title: 'Huge', minutes: 1e300 }], [0, 1, 2, 3, 4]);
+  assert.deepEqual(odd[0], { title: 'Spaced out', estimated_minutes: 13 }); assert.equal(odd[1].title.length, 120); assert.ok(!('estimated_minutes' in odd[1]));
+  assert.deepEqual(odd[2], { title: 'No minutes' }); assert.deepEqual(odd[3], { title: 'NaN' }); assert.equal(odd[4].estimated_minutes, Number.MAX_SAFE_INTEGER);
+  const db = fresh(), t = addTask(db); // the engine (a mirror of the backend validation) accepts exactly what the planner builds
+  assert.equal(call(db, 'POST', `/tasks/${t.task_id}/subtasks`, { subtasks: items }).subtasks.length, 2);
+});
+
+test('B planner append: existing subtasks and their states are preserved, new ones are appended, no parent task is created', async () => {
+  const db = fresh(), p = parentWith(db), { api, sent } = pageApi(db), before = ids(p);
+  sub(db, p.task_id, 'complete', before[0]); sub(db, p.task_id, 'complete', before[1]);
+  const u = await api.addSubtasks(p.task_id, { subtasks: planStepsToSubtasks(PLAN, [0, 2]) });
+  assert.deepEqual(ids(u).slice(0, 3), before); assert.deepEqual(u.subtasks.slice(0, 3).map(s => s.status), ['completed', 'completed', 'not_started']);
+  assert.deepEqual(u.subtasks.slice(3).map(s => [s.title, s.estimated_minutes, s.status]), [['Define scope and outline', 60, 'not_started'], ['Draft main sections', 60, 'not_started']]);
+  assert.deepEqual([u.progress_pct, u.status], [40, 'in_progress']); assert.equal(call(db, 'GET', '/tasks').length, 1);
+  assert.deepEqual(sent, [`POST /tasks/${p.task_id}/subtasks`]); assert.ok(sent.every(x => !/^POST \/tasks$/.test(x)));
+  assert.deepEqual(validateV2Db(db), []);
+});
+
+test('B capacity: 20-subtask limit is enforced and a request over it changes nothing (the page disables Add before that)', async () => {
+  const db = fresh(), p = parentWith(db, Array.from({ length: 18 }, (_, i) => 'S' + i)), { api } = pageApi(db), before = snap(db);
+  assert.equal(subtaskCapacity(p), 2);
+  await assert.rejects(api.addSubtasks(p.task_id, { subtasks: planStepsToSubtasks(PLAN, [0, 1, 2]) }), e => e instanceof MockHttpError && e.status === 422 && /at most 20/.test(e.message));
+  assert.equal(snap(db), before);
+  const u = await api.addSubtasks(p.task_id, { subtasks: planStepsToSubtasks(PLAN, [0, 1]) }); // exactly filling it is allowed
+  assert.equal(u.subtasks.length, 20); assert.equal(subtaskCapacity(u), 0);
+  await assert.rejects(api.addSubtasks(p.task_id, { subtasks: planStepsToSubtasks(PLAN, [0]) }), e => e.status === 422); assert.equal(get(db, p.task_id).subtasks.length, 20);
+});
+
+test('B completed parent: the page warns first because adding reopens it', async () => {
+  const db = fresh(), p = parentWith(db, ['a', 'b']), { api } = pageApi(db);
+  sub(db, p.task_id, 'complete', p.subtasks[0].subtask_id); const done = sub(db, p.task_id, 'complete', p.subtasks[1].subtask_id);
+  assert.equal(done.status, 'completed'); assert.equal(addingReopens(done), true); assert.equal(addingReopens({ status: 'in_progress' }), false);
+  const u = await api.addSubtasks(p.task_id, { subtasks: planStepsToSubtasks(PLAN, [0]) });
+  assert.deepEqual([u.status, u.progress_pct, u.subtasks.length], ['in_progress', 67, 3]);
+  const manual = addTask(db, { title: 'Manual done' }); call(db, 'POST', `/tasks/${manual.task_id}/complete`); // completed with no subtasks at all
+  assert.equal(addingReopens(get(db, manual.task_id)), true);
+  const m = await api.addSubtasks(manual.task_id, { subtasks: planStepsToSubtasks(PLAN, [0]) }); assert.deepEqual([m.status, m.progress_pct], ['in_progress', 0]);
+});
+
+test('B request lock: a double click on Add or on a subtask action sends exactly one request', async () => {
+  const db = fresh(), p = parentWith(db), { api, sent } = pageApi(db);
+  const add = guard(() => api.addSubtasks(p.task_id, { subtasks: planStepsToSubtasks(PLAN, [0]) }));
+  await Promise.all([add(), add(), add()]); assert.equal(sent.length, 1); assert.equal(get(db, p.task_id).subtasks.length, 4);
+  sent.length = 0; const act = guard(fn => fn()), sid = ids(p)[0];
+  await Promise.all([act(() => api.completeSubtask(p.task_id, sid)), act(() => api.completeSubtask(p.task_id, sid)), act(() => api.deleteSubtask(p.task_id, ids(p)[1]))]);
+  assert.deepEqual(sent, [`POST /tasks/${p.task_id}/subtasks/${sid}/complete`]); assert.equal(get(db, p.task_id).subtasks.length, 4);
+  await act(() => api.reopenSubtask(p.task_id, sid)); assert.equal(sent.length, 2); // the lock is released afterwards
+});
+
+test('B My Tasks: the local list follows each response through add, complete, reopen and delete, and always equals a fresh load', async () => {
+  const db = fresh(), p = parentWith(db, ['a', 'b', 'c', 'd']), { api } = pageApi(db), other = addTask(db, { title: 'Other' });
+  let list = await api.getTasks(); const sid = i => list.find(t => t.task_id === p.task_id).subtasks[i].subtask_id, apply = async r => { list = replaceLocal(list, await r) };
+  const parent = () => list.find(t => t.task_id === p.task_id), step = async (r, exp) => { await apply(r); assert.deepEqual([parent().progress_pct, parent().status], exp); assert.deepEqual(list, await api.getTasks()) };
+  await step(api.completeSubtask(p.task_id, sid(0)), [25, 'in_progress']); await step(api.completeSubtask(p.task_id, sid(1)), [50, 'in_progress']);
+  await step(api.reopenSubtask(p.task_id, sid(1)), [25, 'in_progress']); await step(api.deleteSubtask(p.task_id, sid(3)), [33, 'in_progress']);
+  await step(api.addSubtasks(p.task_id, { subtasks: [{ title: 'e', estimated_minutes: 5 }] }), [25, 'in_progress']);
+  await step(api.completeSubtask(p.task_id, sid(1)), [50, 'in_progress']); await step(api.completeSubtask(p.task_id, sid(2)), [75, 'in_progress']); await step(api.completeSubtask(p.task_id, sid(3)), [100, 'completed']);
+  assert.equal(list.find(t => t.task_id === other.task_id).subtasks.length, 0); // other tasks are untouched
+});
+
+test('B parent restrictions: with subtasks the parent cannot be completed, reopened or given a manual progress; without subtasks nothing changes', async () => {
+  const db = fresh(), p = parentWith(db, ['a', 'b']), plain = addTask(db, { title: 'Plain' }), { api } = pageApi(db);
+  await assert.rejects(api.completeTask(p.task_id), e => e.status === 409);
+  rejects(() => call(db, 'PATCH', `/tasks/${p.task_id}`, { progress_pct: 50 }), 422);
+  assert.equal(call(db, 'PATCH', `/tasks/${p.task_id}`, { title: 'Renamed' }).title, 'Renamed'); // other edits still work (the modal sends no progress_pct for it)
+  sub(db, p.task_id, 'complete', p.subtasks[0].subtask_id); sub(db, p.task_id, 'complete', p.subtasks[1].subtask_id);
+  rejects(() => call(db, 'POST', `/tasks/${p.task_id}/reopen`), 409); rejects(() => call(db, 'POST', `/tasks/${p.task_id}/start`), 409); // completed: only a subtask reopen helps
+  const fresh2 = parentWith(db, ['x', 'y'], { title: 'Startable' }); assert.equal(call(db, 'POST', `/tasks/${fresh2.task_id}/start`).status, 'in_progress'); // Start stays available with subtasks
+  assert.equal(call(db, 'PATCH', `/tasks/${plain.task_id}`, { progress_pct: 40 }).progress_pct, 40);
+  assert.equal(call(db, 'POST', `/tasks/${plain.task_id}/complete`).status, 'completed'); assert.equal(call(db, 'POST', `/tasks/${plain.task_id}/reopen`).status, 'in_progress');
+});
+
+test('B old data: a stored task without a subtasks field loads, takes new subtasks, and the helpers cope', async () => {
+  const db = fresh(), t = addTask(db), { api } = pageApi(db); delete db.tasks[0].subtasks;
+  assert.deepEqual(validateV2Db(db), []); const loaded = (await api.getTasks())[0]; assert.equal(hasSubtasks(loaded), false); assert.equal(subtaskCapacity(loaded), UI_MAX);
+  const u = await api.addSubtasks(t.task_id, { subtasks: planStepsToSubtasks(PLAN, [0, 1]) }); assert.equal(u.subtasks.length, 2); assert.deepEqual(validateV2Db(db), []);
 });

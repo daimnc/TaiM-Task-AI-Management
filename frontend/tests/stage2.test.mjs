@@ -142,7 +142,8 @@ test('Stage 2 pages use only V2 field names and the V2 API; settings has no prog
   }
   const st = src('pages/settings.js'); assert.doesNotMatch(st, /program|weeklySummary|name:\s*f\.name/); assert.match(st, /full_name/);
   assert.match(src('pages/reminders.js'), /saveReminderPrefs\(\{\[/); // partial save, no mutation of the loaded prefs
-  assert.match(src('pages/planner.js'), /addSequentially/); assert.doesNotMatch(src('pages/planner.js'), /Promise\.all\(sel/);
+  // Stage B: the planner appends subtasks to an existing parent in ONE batch request; it no longer creates a task per step.
+  assert.match(src('pages/planner.js'), /api\.addSubtasks/); assert.doesNotMatch(src('pages/planner.js'), /addSequentially|createTask|Promise\.all\(sel/);
 });
 
 test('safety: MOCK_V2 still false; login page and auth code untouched by this stage', () => {

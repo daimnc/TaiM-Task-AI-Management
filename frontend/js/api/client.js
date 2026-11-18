@@ -85,7 +85,7 @@ async function mock(method, path, body) {
 // ---- Mock database v2 (Phase 3). DORMANT: keep MOCK_V2 = false until every page uses the v2 data shapes (Batch 3.2). ----
 // While false, mockV2 is never called, so no taim_mock_db_v2 or backup key is ever created and the legacy mock above is used.
 // When true (mock mode only), the first request loads/converts the data via bootstrapMockV2 (see mockData.js).
-const MOCK_V2 = false; let v2db = null;
+const MOCK_V2 = true; let v2db = null;
 
 async function mockV2(method, path, body) {
   await new Promise(r => setTimeout(r, 250));
@@ -131,8 +131,13 @@ export const api = {
   getSettings: () => req('GET', '/settings'), saveSettings: b => req('PUT', '/settings', b),
   getReminderPrefs: () => req('GET', '/reminders/preferences'), saveReminderPrefs: b => req('PUT', '/reminders/preferences', b),
   planTask: b => req('POST', '/ai/plan', b), askAssistant: b => req('POST', '/ai/chat', b),
-  // Phase 1 API (subjects, task actions). Not used by any page yet (Batch 3.2). With the legacy mock they answer 404.
+  // Phase 1 API (subjects, task actions). With the legacy mock they answer 404.
   getSubjects: () => req('GET', '/subjects'), createSubject: b => req('POST', '/subjects', b),
   renameSubject: (id, b) => req('PATCH', '/subjects/' + encodeURIComponent(id), b), deleteSubject: id => req('DELETE', '/subjects/' + encodeURIComponent(id)),
-  startTask: id => req('POST', '/tasks/' + encodeURIComponent(id) + '/start'), completeTask: id => req('POST', '/tasks/' + encodeURIComponent(id) + '/complete'), reopenTask: id => req('POST', '/tasks/' + encodeURIComponent(id) + '/reopen')
+  startTask: id => req('POST', '/tasks/' + encodeURIComponent(id) + '/start'), completeTask: id => req('POST', '/tasks/' + encodeURIComponent(id) + '/complete'), reopenTask: id => req('POST', '/tasks/' + encodeURIComponent(id) + '/reopen'),
+  // Subtasks (Stage B). Every call answers with the updated PARENT task. With the legacy mock they answer 404.
+  addSubtasks: (id, b) => req('POST', '/tasks/' + encodeURIComponent(id) + '/subtasks', b),
+  completeSubtask: (id, sid) => req('POST', '/tasks/' + encodeURIComponent(id) + '/subtasks/' + encodeURIComponent(sid) + '/complete'),
+  reopenSubtask: (id, sid) => req('POST', '/tasks/' + encodeURIComponent(id) + '/subtasks/' + encodeURIComponent(sid) + '/reopen'),
+  deleteSubtask: (id, sid) => req('DELETE', '/tasks/' + encodeURIComponent(id) + '/subtasks/' + encodeURIComponent(sid))
 };

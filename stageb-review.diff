@@ -1,0 +1,272 @@
+diff --git a/frontend/css/styles.css b/frontend/css/styles.css
+index 127cfa0..c4e8e09 100644
+--- a/frontend/css/styles.css
++++ b/frontend/css/styles.css
+@@ -89,3 +89,11 @@ input[type=range]{accent-color:var(--pur);padding:0}
+ .pomo label{text-align:left}
+ 
+ .locked{opacity:.55;pointer-events:none;cursor:progress}
++
++/* Phase 3.2 Stage B: subtasks */
++.sublist{list-style:none;margin:0;padding:0}
++.sublist li{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px;flex-wrap:wrap}.sublist li:last-child{border:0}
++.sublist .mark{flex:none;width:16px;color:var(--pur)}.sublist .st-title{flex:1;min-width:0}.sublist li.done .st-title{color:var(--mut);text-decoration:line-through}
++.sublist small{white-space:nowrap}.sublist .sacts{display:flex;gap:4px;flex-shrink:0}
++tr.subs td{padding:0 8px 12px 28px;background:#fafaff}.subnote{font-size:12px;color:var(--mut);padding:8px 0 4px}
++.warnbox{background:#fff4e5;color:#a05a00;border-radius:12px;padding:10px 12px;font-size:12px;margin:10px 0}
+diff --git a/frontend/js/api/client.js b/frontend/js/api/client.js
+index 1df5bda..3c44f99 100644
+--- a/frontend/js/api/client.js
++++ b/frontend/js/api/client.js
+@@ -85,7 +85,7 @@ async function mock(method, path, body) {
+ // ---- Mock database v2 (Phase 3). DORMANT: keep MOCK_V2 = false until every page uses the v2 data shapes (Batch 3.2). ----
+ // While false, mockV2 is never called, so no taim_mock_db_v2 or backup key is ever created and the legacy mock above is used.
+ // When true (mock mode only), the first request loads/converts the data via bootstrapMockV2 (see mockData.js).
+-const MOCK_V2 = false; let v2db = null;
++const MOCK_V2 = true; let v2db = null;
+ 
+ async function mockV2(method, path, body) {
+   await new Promise(r => setTimeout(r, 250));
+@@ -131,8 +131,13 @@ export const api = {
+   getSettings: () => req('GET', '/settings'), saveSettings: b => req('PUT', '/settings', b),
+   getReminderPrefs: () => req('GET', '/reminders/preferences'), saveReminderPrefs: b => req('PUT', '/reminders/preferences', b),
+   planTask: b => req('POST', '/ai/plan', b), askAssistant: b => req('POST', '/ai/chat', b),
+-  // Phase 1 API (subjects, task actions). Not used by any page yet (Batch 3.2). With the legacy mock they answer 404.
++  // Phase 1 API (subjects, task actions). With the legacy mock they answer 404.
+   getSubjects: () => req('GET', '/subjects'), createSubject: b => req('POST', '/subjects', b),
+   renameSubject: (id, b) => req('PATCH', '/subjects/' + encodeURIComponent(id), b), deleteSubject: id => req('DELETE', '/subjects/' + encodeURIComponent(id)),
+-  startTask: id => req('POST', '/tasks/' + encodeURIComponent(id) + '/start'), completeTask: id => req('POST', '/tasks/' + encodeURIComponent(id) + '/complete'), reopenTask: id => req('POST', '/tasks/' + encodeURIComponent(id) + '/reopen')
++  startTask: id => req('POST', '/tasks/' + encodeURIComponent(id) + '/start'), completeTask: id => req('POST', '/tasks/' + encodeURIComponent(id) + '/complete'), reopenTask: id => req('POST', '/tasks/' + encodeURIComponent(id) + '/reopen'),
++  // Subtasks (Stage B). Every call answers with the updated PARENT task. With the legacy mock they answer 404.
++  addSubtasks: (id, b) => req('POST', '/tasks/' + encodeURIComponent(id) + '/subtasks', b),
++  completeSubtask: (id, sid) => req('POST', '/tasks/' + encodeURIComponent(id) + '/subtasks/' + encodeURIComponent(sid) + '/complete'),
++  reopenSubtask: (id, sid) => req('POST', '/tasks/' + encodeURIComponent(id) + '/subtasks/' + encodeURIComponent(sid) + '/reopen'),
++  deleteSubtask: (id, sid) => req('DELETE', '/tasks/' + encodeURIComponent(id) + '/subtasks/' + encodeURIComponent(sid))
+ };
+\ No newline at end of file
+diff --git a/frontend/js/pages/tasks.js b/frontend/js/pages/tasks.js
+index d535e36..253a367 100644
+--- a/frontend/js/pages/tasks.js
++++ b/frontend/js/pages/tasks.js
+@@ -1,26 +1,36 @@
+ import {api} from '../api/client.js';
+ import {$,load,guard,esc,fmtDate,sortByDue,empty,toast,today,iso,categoryLabel,importancePill,statusPill,subjectName,isCompleted,CATEGORY_LABELS} from '../ui.js';
+ import {taskModal} from '../components/taskModal.js';
+-import {isOverdue} from '../taskStats.js';
++import {isOverdue,hasSubtasks,subtaskCounts} from '../taskStats.js';
+ const btn=(a,id,label,cls='')=>`<button class="lnk ${cls}" data-a="${a}" data-id="${esc(id)}">${label}</button>`;
+-const stateBtns=t=>t.status==='completed'?btn('reopen',t.task_id,'Reopen'):(t.status==='not_started'?btn('start',t.task_id,'Start'):'')+btn('complete',t.task_id,'Done');
+-const OK={start:'Task started',complete:'Task completed',reopen:'Task reopened'};
++// A task with subtasks is finished only through its subtasks (the server answers 409 to Done/Reopen), so only Start stays.
++const stateBtns=t=>hasSubtasks(t)?(t.status==='not_started'?btn('start',t.task_id,'Start'):''):t.status==='completed'?btn('reopen',t.task_id,'Reopen'):(t.status==='not_started'?btn('start',t.task_id,'Start'):'')+btn('complete',t.task_id,'Done');
++const sbtn=(a,t,s,label,cls='')=>`<button class="lnk ${cls}" data-a="${a}" data-id="${esc(t.task_id)}" data-sid="${esc(s.subtask_id)}">${label}</button>`;
++const subRows=t=>hasSubtasks(t)?`<tr class="subs"><td colspan="7"><div class="subnote">Progress is calculated from subtasks. Complete or reopen a subtask to change it.</div><ul class="sublist">${t.subtasks.map(s=>{const d=s.status==='completed';return `<li class="${d?'done':''}"><span class="mark" aria-hidden="true">${d?'✓':'○'}</span><span class="st-title">${esc(s.title)}</span><small>~${esc(s.estimated_minutes)} min</small><span class="sacts">${d?sbtn('sub-reopen',t,s,'Reopen'):sbtn('sub-complete',t,s,'Complete')}${sbtn('sub-del',t,s,'Delete','del')}</span></li>`}).join('')}</ul></td></tr>`:'';
++const progNote=t=>{if(!hasSubtasks(t))return '';const c=subtaskCounts(t);return `<small>${c.done} of ${c.total} subtasks</small>`};
++const OK={start:'Task started',complete:'Task completed',reopen:'Task reopened',subComplete:'Subtask completed',subReopen:'Subtask reopened',subDel:'Subtask deleted'};
+ export default{title:'My Tasks',render(el){
+  el.innerHTML=`<div class="page-head"><div><h2>My Tasks</h2><p class="sub">Manage assignments, exams, projects, and research.</p></div><button class="btn primary" id="add">+ Add Task</button></div>
+  <div class="card"><div class="toolbar"><input id="q" placeholder="Search tasks…"><select id="cat"><option value="">All categories</option>${Object.entries(CATEGORY_LABELS).map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select><select id="st"><option value="">All statuses</option><option value="active">Active (not completed)</option><option value="not_started">Not started</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></div><div id="list" class="tablewrap"></div></div>`;
+  let tasks=[],subjects=[];const list=$('#list',el);
+- const row=(t,td)=>`<tr><td><b>${esc(t.title)}</b><small>${esc(subjectName(subjects,t.subject_id))}</small></td><td data-l="Category">${esc(categoryLabel(t.category))}</td><td data-l="Deadline">${fmtDate(t.deadline)}${isOverdue(t,td)?' <span class="od">Overdue</span>':''}</td><td data-l="Importance">${importancePill(t.importance)}</td><td data-l="Status">${statusPill(t.status)}</td><td data-l="Progress"><span class="prog"><i style="width:${t.progress_pct}%"></i></span>${t.progress_pct}%</td><td class="acts">${stateBtns(t)}${btn('edit',t.task_id,'Edit')}${btn('del',t.task_id,'Delete','del')}</td></tr>`;
++ const row=(t,td)=>`<tr><td><b>${esc(t.title)}</b><small>${esc(subjectName(subjects,t.subject_id))}</small></td><td data-l="Category">${esc(categoryLabel(t.category))}</td><td data-l="Deadline">${fmtDate(t.deadline)}${isOverdue(t,td)?' <span class="od">Overdue</span>':''}</td><td data-l="Importance">${importancePill(t.importance)}</td><td data-l="Status">${statusPill(t.status)}</td><td data-l="Progress"><span class="prog"><i style="width:${t.progress_pct}%"></i></span>${t.progress_pct}%${progNote(t)}</td><td class="acts">${stateBtns(t)}${btn('edit',t.task_id,'Edit')}${btn('del',t.task_id,'Delete','del')}</td></tr>${subRows(t)}`;
+  const draw=()=>{const q=$('#q',el).value.toLowerCase(),c=$('#cat',el).value,s=$('#st',el).value,td=iso(today());
+   const r=sortByDue(tasks).filter(t=>(!q||(t.title+' '+subjectName(subjects,t.subject_id)).toLowerCase().includes(q))&&(!c||t.category===c)&&(!s||(s==='active'?!isCompleted(t):t.status===s)));
+   list.innerHTML=r.length?`<table><thead><tr><th>TASK</th><th>CATEGORY</th><th>DEADLINE</th><th>IMPORTANCE</th><th>STATUS</th><th>PROGRESS</th><th></th></tr></thead><tbody>${r.map(t=>row(t,td)).join('')}</tbody></table>`:empty(tasks.length?'No tasks match your filters.':'No tasks yet. Click "+ Add Task" to create one.')};
+  const refresh=()=>load(list,()=>Promise.all([api.getTasks(),api.getSubjects()]),([t,s])=>{tasks=t;subjects=s;draw()});
+- const act=guard(async(fn,msg)=>{try{await fn();if(msg)toast(msg);await refresh()}catch(e){toast(e.message,'bad')}},list);
++ // One lock for every action in the list. Subtask actions (local=true) answer with the updated parent: it replaces the old one in
++ // the local list and the table is redrawn, with no full reload. A stale list (404/409) is reloaded after the error is shown.
++ const act=guard(async(fn,msg,local)=>{try{const r=await fn();if(msg)toast(msg);if(local&&r?.task_id){tasks=tasks.map(x=>x.task_id===r.task_id?r:x);draw()}else await refresh()}catch(e){toast(e.message,'bad');if(local&&(e.status===404||e.status===409))await refresh()}},list);
+  ['q','cat','st'].forEach(i=>$('#'+i,el).oninput=draw);
+  $('#add',el).onclick=()=>taskModal(null,refresh);
+- list.onclick=e=>{const b=e.target.closest('[data-a]');if(!b)return;const t=tasks.find(x=>x.task_id===b.dataset.id);if(!t)return;const a=b.dataset.a;
++ list.onclick=e=>{const b=e.target.closest('[data-a]');if(!b)return;const t=tasks.find(x=>x.task_id===b.dataset.id);if(!t)return;const a=b.dataset.a,sid=b.dataset.sid,st=sid?(t.subtasks||[]).find(x=>x.subtask_id===sid):null;
++  if(sid&&!st)return;
+   if(a==='edit')taskModal(t,refresh);
+   else if(a==='start')act(()=>api.startTask(t.task_id),OK.start);
+   else if(a==='complete')act(()=>api.completeTask(t.task_id),OK.complete);
+   else if(a==='reopen')act(()=>api.reopenTask(t.task_id),OK.reopen);
++  else if(a==='sub-complete')act(()=>api.completeSubtask(t.task_id,sid),OK.subComplete,true);
++  else if(a==='sub-reopen')act(()=>api.reopenSubtask(t.task_id,sid),OK.subReopen,true);
++  else if(a==='sub-del'&&confirm(`Delete subtask "${st.title}"?`))act(()=>api.deleteSubtask(t.task_id,sid),OK.subDel,true);
+   else if(a==='del'&&confirm(`Delete "${t.title}"?`))act(()=>api.deleteTask(t.task_id),'Task deleted')};
+  refresh()}};
+diff --git a/frontend/tests/consumers.test.mjs b/frontend/tests/consumers.test.mjs
+index e5d041c..f80ec10 100644
+--- a/frontend/tests/consumers.test.mjs
++++ b/frontend/tests/consumers.test.mjs
+@@ -2,7 +2,7 @@
+ // No browser, no network. Pages that need a DOM are covered by static checks here plus the manual browser checklist.
+ import test from 'node:test';
+ import assert from 'node:assert/strict';
+-import { readFileSync } from 'node:fs';
++import { readFileSync, readdirSync } from 'node:fs';
+ import { seedV2, mockV2Request, MockHttpError } from '../js/api/mockData.js';
+ import { statusPill, statusLabel, subjectName, cleanName, guard } from '../js/ui.js';
+ import { isOverdue, isDueSoon, taskCounts, daysBetween } from '../js/taskStats.js';
+@@ -153,3 +153,43 @@ test('Tasks, Subjects and Reminders use guard for their unprotected actions', ()
+   assert.match(src('pages/subjects.js'), /const remove=guard\(/);
+   assert.match(src('pages/reminders.js'), /const save=guard\(/);
+ });
++
++// ---- Stage B: static checks (pages need a DOM, so their wiring is checked in the source) ----
++test('B client: four subtask methods use the right verbs and paths, and encode ids', () => {
++  const c = src('api/client.js');
++  assert.match(c, /addSubtasks: \(id, b\) => req\('POST', '\/tasks\/' \+ encodeURIComponent\(id\) \+ '\/subtasks', b\)/);
++  assert.match(c, /completeSubtask: \(id, sid\) => req\('POST', '\/tasks\/' \+ encodeURIComponent\(id\) \+ '\/subtasks\/' \+ encodeURIComponent\(sid\) \+ '\/complete'\)/);
++  assert.match(c, /reopenSubtask: \(id, sid\) => req\('POST', '\/tasks\/' \+ encodeURIComponent\(id\) \+ '\/subtasks\/' \+ encodeURIComponent\(sid\) \+ '\/reopen'\)/);
++  assert.match(c, /deleteSubtask: \(id, sid\) => req\('DELETE', '\/tasks\/' \+ encodeURIComponent\(id\) \+ '\/subtasks\/' \+ encodeURIComponent\(sid\)\)/);
++});
++
++test('B pages and components never call fetch; they go through the api client', () => {
++  for (const dir of ['pages', 'components']) for (const f of readdirSync(new URL('../js/' + dir, import.meta.url)).filter(x => x.endsWith('.js'))) assert.doesNotMatch(src(`${dir}/${f}`), /\bfetch\s*\(/, `${dir}/${f}`);
++  assert.match(src('pages/planner.js'), /import \{api\} from '\.\.\/api\/client\.js'/);
++});
++
++test('B planner: only appends subtasks to an existing parent; no new tasks or subjects, no category/importance/subject fields, no dates shown', () => {
++  const p = src('pages/planner.js');
++  assert.match(p, /api\.getTasks\(\)/); assert.match(p, /api\.planTask\(/); assert.match(p, /api\.addSubtasks\(p\.task_id,\{subtasks:items\}\)/);
++  assert.doesNotMatch(p, /createTask|createSubject|getSubjects|updateTask|joinTitle|addSequentially|new_subject|subject_id|name="category"|name="importance"/);
++  assert.doesNotMatch(p, /dueDate|fmtDate\(s\./); assert.match(p, /q\.get\('task'\)/); // deep link ?task=ID preselects the parent
++  assert.match(p, /planStepsToSubtasks/); assert.match(p, /const add=guard\(/); assert.match(p, /const gen=guard\(/);
++  assert.match(p, /addingReopens\(p\)&&!confirm\(/); assert.match(p, /subtaskCapacity/); assert.match(p, /add\.disabled=!n\|\|n>cap/);
++  assert.match(p, /TEMPLATE PLAN · NO AI MODEL USED/); assert.match(p, /href="#\/tasks"/); // empty state points to My Tasks
++});
++
++test('B My Tasks: subtask rows with Complete / Reopen / Delete (confirmed), one lock, local replace; Done and Reopen hidden for parents with subtasks', () => {
++  const t = src('pages/tasks.js');
++  assert.match(t, /api\.completeSubtask/); assert.match(t, /api\.reopenSubtask/); assert.match(t, /api\.deleteSubtask/);
++  assert.match(t, /a==='sub-del'&&confirm\(/); assert.match(t, /const act=guard\(/); assert.equal((t.match(/guard\(/g) || []).length, 1, 'a single lock for every list action');
++  assert.match(t, /stateBtns=t=>hasSubtasks\(t\)\?\(t\.status==='not_started'\?btn\('start'[^:]*:''\):t\.status==='completed'/);
++  assert.match(t, /tasks=tasks\.map\(x=>x\.task_id===r\.task_id\?r:x\);draw\(\)/); assert.match(t, /Progress is calculated from subtasks/);
++  assert.match(t, /OK\.subComplete,true\)/); assert.match(t, /OK\.subReopen,true\)/); assert.match(t, /OK\.subDel,true\)/);
++  assert.doesNotMatch(t, /\.course\b|\bpriority\b|isDone|\bt\.id\b|\.progress\b/);
++});
++
++test('B task modal: progress slider is disabled for a task with subtasks, with an explanation', () => {
++  const m = src('components/taskModal.js');
++  assert.match(m, /import \{hasSubtasks\} from '\.\.\/taskStats\.js'/); assert.match(m, /fromSubs=!!task&&hasSubtasks\(task\)/); assert.match(m, /locked=!!task&&\(isCompleted\(task\)\|\|fromSubs\)/);
++  assert.match(m, /calculated from this task/); assert.match(m, /if\(fd\.has\('progress_pct'\)\)/); // a disabled input is not in the form data, so it is never sent
++});
+diff --git a/frontend/tests/subtasks.test.mjs b/frontend/tests/subtasks.test.mjs
+index d64ffa4..087217b 100644
+--- a/frontend/tests/subtasks.test.mjs
++++ b/frontend/tests/subtasks.test.mjs
+@@ -3,6 +3,8 @@
+ import test from 'node:test';
+ import assert from 'node:assert/strict';
+ import { seedV2, convertLegacyDb, seed, validateV2Db, bootstrapMockV2, mockV2Request, MockHttpError, KEYS, percentDone, MAX_SUBTASKS } from '../js/api/mockData.js';
++import { guard } from '../js/ui.js';
++import { hasSubtasks, subtaskCounts, subtaskCapacity, planStepsToSubtasks, addingReopens, MAX_SUBTASKS as UI_MAX } from '../js/taskStats.js';
+ 
+ let n = 0; const ctx = { todayIso: '2026-11-16', newId: p => `${p}s${++n}` };
+ const call = (db, m, p, b) => mockV2Request(db, m, p, b, ctx);
+@@ -258,3 +260,108 @@ test('recalculation: after every add / complete / reopen / delete the parent alw
+   assert.deepEqual([get(db, id).status, get(db, id).progress_pct], ['in_progress', 67]); assert.deepEqual(validateV2Db(db), []);
+   sub(db, id, 'delete', get(db, id).subtasks[2].subtask_id); assert.equal(get(db, id).status, 'completed'); assert.deepEqual(validateV2Db(db), []);
+ });
++
++// ================= Stage B: planner and My Tasks use subtasks (frontend helpers + the same mock engine the API client calls) =================
++// `pageApi` mirrors the api-client methods the pages call (same verbs and paths; consumers.test.mjs checks client.js statically) and counts requests.
++const pageApi = db => {
++  const sent = [], run = (m, p, b) => { sent.push(`${m} ${p}`); return new Promise(r => setTimeout(r, 5)).then(() => call(db, m, p, b)) };
++  return { sent, api: {
++    addSubtasks: (id, b) => run('POST', `/tasks/${id}/subtasks`, b), completeSubtask: (id, sid) => run('POST', `/tasks/${id}/subtasks/${sid}/complete`),
++    reopenSubtask: (id, sid) => run('POST', `/tasks/${id}/subtasks/${sid}/reopen`), deleteSubtask: (id, sid) => run('DELETE', `/tasks/${id}/subtasks/${sid}`),
++    completeTask: id => run('POST', `/tasks/${id}/complete`), getTasks: () => run('GET', '/tasks'), planTask: b => run('POST', '/ai/plan', b) } };
++};
++const replaceLocal = (list, parent) => list.map(t => t.task_id === parent.task_id ? parent : t); // what tasks.js / planner.js do with a response
++const PLAN = [{ title: 'Define scope and outline', dueDate: '2026-11-18', minutes: 60 }, { title: 'Gather and review sources', dueDate: '2026-11-19', minutes: 5400 }, { title: 'Draft main sections', dueDate: '2026-11-20', minutes: 60 }];
++
++test('B helpers: records without a subtasks field (older data) count as having no subtasks', () => {
++  for (const t of [{}, { subtasks: undefined }, { subtasks: null }, { subtasks: 'x' }, { subtasks: [] }, null, undefined]) {
++    assert.equal(hasSubtasks(t), false); assert.deepEqual(subtaskCounts(t), { total: 0, done: 0 }); assert.equal(subtaskCapacity(t), UI_MAX);
++  }
++  const t = { subtasks: [{ status: 'completed' }, { status: 'not_started' }, { status: 'completed' }] };
++  assert.equal(hasSubtasks(t), true); assert.deepEqual(subtaskCounts(t), { total: 3, done: 2 }); assert.equal(subtaskCapacity(t), UI_MAX - 3);
++  assert.equal(UI_MAX, MAX_SUBTASKS, 'frontend limit equals the engine (and backend) limit'); assert.equal(subtaskCapacity({ subtasks: Array(25).fill({}) }), 0);
++});
++
++test('B planner mapping: only the ticked steps are sent, minutes become estimated_minutes, dates are dropped, no other fields', () => {
++  const items = planStepsToSubtasks(PLAN, [2, 0]);
++  assert.deepEqual(items, [{ title: 'Draft main sections', estimated_minutes: 60 }, { title: 'Define scope and outline', estimated_minutes: 60 }]);
++  for (const i of items) assert.deepEqual(Object.keys(i), ['title', 'estimated_minutes']);
++  assert.deepEqual(planStepsToSubtasks(PLAN, [1]), [{ title: 'Gather and review sources', estimated_minutes: 5400 }]); // above 1440 is valid
++  assert.deepEqual(planStepsToSubtasks(PLAN, []), []); assert.deepEqual(planStepsToSubtasks(PLAN, [7, -1]), []); assert.deepEqual(planStepsToSubtasks(null, [0]), []);
++  const odd = planStepsToSubtasks([{ title: '  Spaced   out  ', minutes: 12.6 }, { title: 'x'.repeat(200), minutes: 0 }, { title: 'No minutes' }, { title: 'NaN', minutes: 'abc' }, { title: 'Huge', minutes: 1e300 }], [0, 1, 2, 3, 4]);
++  assert.deepEqual(odd[0], { title: 'Spaced out', estimated_minutes: 13 }); assert.equal(odd[1].title.length, 120); assert.ok(!('estimated_minutes' in odd[1]));
++  assert.deepEqual(odd[2], { title: 'No minutes' }); assert.deepEqual(odd[3], { title: 'NaN' }); assert.equal(odd[4].estimated_minutes, Number.MAX_SAFE_INTEGER);
++  const db = fresh(), t = addTask(db); // the engine (a mirror of the backend validation) accepts exactly what the planner builds
++  assert.equal(call(db, 'POST', `/tasks/${t.task_id}/subtasks`, { subtasks: items }).subtasks.length, 2);
++});
++
++test('B planner append: existing subtasks and their states are preserved, new ones are appended, no parent task is created', async () => {
++  const db = fresh(), p = parentWith(db), { api, sent } = pageApi(db), before = ids(p);
++  sub(db, p.task_id, 'complete', before[0]); sub(db, p.task_id, 'complete', before[1]);
++  const u = await api.addSubtasks(p.task_id, { subtasks: planStepsToSubtasks(PLAN, [0, 2]) });
++  assert.deepEqual(ids(u).slice(0, 3), before); assert.deepEqual(u.subtasks.slice(0, 3).map(s => s.status), ['completed', 'completed', 'not_started']);
++  assert.deepEqual(u.subtasks.slice(3).map(s => [s.title, s.estimated_minutes, s.status]), [['Define scope and outline', 60, 'not_started'], ['Draft main sections', 60, 'not_started']]);
++  assert.deepEqual([u.progress_pct, u.status], [40, 'in_progress']); assert.equal(call(db, 'GET', '/tasks').length, 1);
++  assert.deepEqual(sent, [`POST /tasks/${p.task_id}/subtasks`]); assert.ok(sent.every(x => !/^POST \/tasks$/.test(x)));
++  assert.deepEqual(validateV2Db(db), []);
++});
++
++test('B capacity: 20-subtask limit is enforced and a request over it changes nothing (the page disables Add before that)', async () => {
++  const db = fresh(), p = parentWith(db, Array.from({ length: 18 }, (_, i) => 'S' + i)), { api } = pageApi(db), before = snap(db);
++  assert.equal(subtaskCapacity(p), 2);
++  await assert.rejects(api.addSubtasks(p.task_id, { subtasks: planStepsToSubtasks(PLAN, [0, 1, 2]) }), e => e instanceof MockHttpError && e.status === 422 && /at most 20/.test(e.message));
++  assert.equal(snap(db), before);
++  const u = await api.addSubtasks(p.task_id, { subtasks: planStepsToSubtasks(PLAN, [0, 1]) }); // exactly filling it is allowed
++  assert.equal(u.subtasks.length, 20); assert.equal(subtaskCapacity(u), 0);
++  await assert.rejects(api.addSubtasks(p.task_id, { subtasks: planStepsToSubtasks(PLAN, [0]) }), e => e.status === 422); assert.equal(get(db, p.task_id).subtasks.length, 20);
++});
++
++test('B completed parent: the page warns first because adding reopens it', async () => {
++  const db = fresh(), p = parentWith(db, ['a', 'b']), { api } = pageApi(db);
++  sub(db, p.task_id, 'complete', p.subtasks[0].subtask_id); const done = sub(db, p.task_id, 'complete', p.subtasks[1].subtask_id);
++  assert.equal(done.status, 'completed'); assert.equal(addingReopens(done), true); assert.equal(addingReopens({ status: 'in_progress' }), false);
++  const u = await api.addSubtasks(p.task_id, { subtasks: planStepsToSubtasks(PLAN, [0]) });
++  assert.deepEqual([u.status, u.progress_pct, u.subtasks.length], ['in_progress', 67, 3]);
++  const manual = addTask(db, { title: 'Manual done' }); call(db, 'POST', `/tasks/${manual.task_id}/complete`); // completed with no subtasks at all
++  assert.equal(addingReopens(get(db, manual.task_id)), true);
++  const m = await api.addSubtasks(manual.task_id, { subtasks: planStepsToSubtasks(PLAN, [0]) }); assert.deepEqual([m.status, m.progress_pct], ['in_progress', 0]);
++});
++
++test('B request lock: a double click on Add or on a subtask action sends exactly one request', async () => {
++  const db = fresh(), p = parentWith(db), { api, sent } = pageApi(db);
++  const add = guard(() => api.addSubtasks(p.task_id, { subtasks: planStepsToSubtasks(PLAN, [0]) }));
++  await Promise.all([add(), add(), add()]); assert.equal(sent.length, 1); assert.equal(get(db, p.task_id).subtasks.length, 4);
++  sent.length = 0; const act = guard(fn => fn()), sid = ids(p)[0];
++  await Promise.all([act(() => api.completeSubtask(p.task_id, sid)), act(() => api.completeSubtask(p.task_id, sid)), act(() => api.deleteSubtask(p.task_id, ids(p)[1]))]);
++  assert.deepEqual(sent, [`POST /tasks/${p.task_id}/subtasks/${sid}/complete`]); assert.equal(get(db, p.task_id).subtasks.length, 4);
++  await act(() => api.reopenSubtask(p.task_id, sid)); assert.equal(sent.length, 2); // the lock is released afterwards
++});
++
++test('B My Tasks: the local list follows each response through add, complete, reopen and delete, and always equals a fresh load', async () => {
++  const db = fresh(), p = parentWith(db, ['a', 'b', 'c', 'd']), { api } = pageApi(db), other = addTask(db, { title: 'Other' });
++  let list = await api.getTasks(); const sid = i => list.find(t => t.task_id === p.task_id).subtasks[i].subtask_id, apply = async r => { list = replaceLocal(list, await r) };
++  const parent = () => list.find(t => t.task_id === p.task_id), step = async (r, exp) => { await apply(r); assert.deepEqual([parent().progress_pct, parent().status], exp); assert.deepEqual(list, await api.getTasks()) };
++  await step(api.completeSubtask(p.task_id, sid(0)), [25, 'in_progress']); await step(api.completeSubtask(p.task_id, sid(1)), [50, 'in_progress']);
++  await step(api.reopenSubtask(p.task_id, sid(1)), [25, 'in_progress']); await step(api.deleteSubtask(p.task_id, sid(3)), [33, 'in_progress']);
++  await step(api.addSubtasks(p.task_id, { subtasks: [{ title: 'e', estimated_minutes: 5 }] }), [25, 'in_progress']);
++  await step(api.completeSubtask(p.task_id, sid(1)), [50, 'in_progress']); await step(api.completeSubtask(p.task_id, sid(2)), [75, 'in_progress']); await step(api.completeSubtask(p.task_id, sid(3)), [100, 'completed']);
++  assert.equal(list.find(t => t.task_id === other.task_id).subtasks.length, 0); // other tasks are untouched
++});
++
++test('B parent restrictions: with subtasks the parent cannot be completed, reopened or given a manual progress; without subtasks nothing changes', async () => {
++  const db = fresh(), p = parentWith(db, ['a', 'b']), plain = addTask(db, { title: 'Plain' }), { api } = pageApi(db);
++  await assert.rejects(api.completeTask(p.task_id), e => e.status === 409);
++  rejects(() => call(db, 'PATCH', `/tasks/${p.task_id}`, { progress_pct: 50 }), 422);
++  assert.equal(call(db, 'PATCH', `/tasks/${p.task_id}`, { title: 'Renamed' }).title, 'Renamed'); // other edits still work (the modal sends no progress_pct for it)
++  sub(db, p.task_id, 'complete', p.subtasks[0].subtask_id); sub(db, p.task_id, 'complete', p.subtasks[1].subtask_id);
++  rejects(() => call(db, 'POST', `/tasks/${p.task_id}/reopen`), 409); rejects(() => call(db, 'POST', `/tasks/${p.task_id}/start`), 409); // completed: only a subtask reopen helps
++  const fresh2 = parentWith(db, ['x', 'y'], { title: 'Startable' }); assert.equal(call(db, 'POST', `/tasks/${fresh2.task_id}/start`).status, 'in_progress'); // Start stays available with subtasks
++  assert.equal(call(db, 'PATCH', `/tasks/${plain.task_id}`, { progress_pct: 40 }).progress_pct, 40);
++  assert.equal(call(db, 'POST', `/tasks/${plain.task_id}/complete`).status, 'completed'); assert.equal(call(db, 'POST', `/tasks/${plain.task_id}/reopen`).status, 'in_progress');
++});
++
++test('B old data: a stored task without a subtasks field loads, takes new subtasks, and the helpers cope', async () => {
++  const db = fresh(), t = addTask(db), { api } = pageApi(db); delete db.tasks[0].subtasks;
++  assert.deepEqual(validateV2Db(db), []); const loaded = (await api.getTasks())[0]; assert.equal(hasSubtasks(loaded), false); assert.equal(subtaskCapacity(loaded), UI_MAX);
++  const u = await api.addSubtasks(t.task_id, { subtasks: planStepsToSubtasks(PLAN, [0, 1]) }); assert.equal(u.subtasks.length, 2); assert.deepEqual(validateV2Db(db), []);
++});

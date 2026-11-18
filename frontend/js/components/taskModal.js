@@ -1,5 +1,6 @@
 import {api} from '../api/client.js';
 import {modal,toast,esc,today,iso,cleanName,isCompleted,CATEGORY_LABELS,IMPORTANCE_LABELS} from '../ui.js';
+import {hasSubtasks} from '../taskStats.js';
 export const CATEGORIES=Object.keys(CATEGORY_LABELS);
 export const opts=(l,s)=>l.map(x=>`<option${String(x)===String(s)?' selected':''}>${x}</option>`).join('');
 const kv=(m,s)=>Object.entries(m).map(([v,l])=>`<option value="${v}"${v===s?' selected':''}>${l}</option>`).join('');
@@ -9,7 +10,7 @@ const NEW='__new__';
 export async function taskModal(task,done,defaults={}){
  let subjects;try{subjects=await api.getSubjects()}catch(e){return toast(e.message,'bad')}
  const t={title:'',subject_id:subjects[0]?.subject_id??NEW,category:'assignment',importance:'medium',deadline:iso(today()),progress_pct:0,...defaults,...task};
- const sel=subjects.some(s=>s.subject_id===t.subject_id)?t.subject_id:NEW,locked=!!task&&isCompleted(task);let created=null;
+ const sel=subjects.some(s=>s.subject_id===t.subject_id)?t.subject_id:NEW,fromSubs=!!task&&hasSubtasks(task),locked=!!task&&(isCompleted(task)||fromSubs);let created=null; // fromSubs: progress comes from the subtasks, so the slider is disabled (a disabled input is not sent)
  const subjOpts=subjects.map(s=>`<option value="${esc(s.subject_id)}"${s.subject_id===sel?' selected':''}>${esc(s.subject_name)}</option>`).join('')+`<option value="${NEW}"${sel===NEW?' selected':''}>+ New subject…</option>`;
  modal(task?'Edit task':'Add task',`
  <label>Title<input name="title" required maxlength="120" value="${esc(t.title)}"></label>
@@ -17,7 +18,7 @@ export async function taskModal(task,done,defaults={}){
  <label data-ns${sel===NEW?'':' hidden'}>New subject name<input name="new_subject" maxlength="100" placeholder="e.g. Mathematics"></label>
  <div class="row"><label>Category<select name="category">${kv(CATEGORY_LABELS,t.category)}</select></label><label>Importance<select name="importance">${kv(IMPORTANCE_LABELS,t.importance)}</select></label></div>
  <label>Deadline<input type="date" name="deadline" required value="${esc(t.deadline)}"></label>
- ${task?`<label><span>Progress: <output>${t.progress_pct}</output>%</span><input type="range" name="progress_pct" min="0" max="100" step="1" value="${t.progress_pct}"${locked?' disabled':''} oninput="this.parentNode.querySelector('output').value=this.value"></label><small class="hint">${locked?'Completed tasks stay at 100%. Reopen the task to change progress.':'Progress does not change the status. Use Start or Done in the task list.'}</small>`:''}`,
+ ${task?`<label><span>Progress: <output>${t.progress_pct}</output>%</span><input type="range" name="progress_pct" min="0" max="100" step="1" value="${t.progress_pct}"${locked?' disabled':''} oninput="this.parentNode.querySelector('output').value=this.value"></label><small class="hint">${fromSubs?'Progress is calculated from this task\'s subtasks. Complete or reopen a subtask to change it.':locked?'Completed tasks stay at 100%. Reopen the task to change progress.':'Progress does not change the status. Use Start or Done in the task list.'}</small>`:''}`,
  async fd=>{
   const b={title:cleanName(fd.get('title')),category:fd.get('category'),importance:fd.get('importance'),deadline:fd.get('deadline')};
   if(!b.title)throw new Error('Title is required');if(!b.deadline)throw new Error('Deadline is required');
