@@ -43,3 +43,9 @@ export const statusPill=s=>{const k=Object.hasOwn(STATUS_LABELS,s)?s:'not_starte
 export const subjectName=(subjects,id)=>(subjects||[]).find(s=>s.subject_id===id)?.subject_name??'Unknown subject';
 // Trim and collapse runs of spaces, the same clean-text rule the API uses for names.
 export const cleanName=s=>String(s??'').split(/\s+/).filter(Boolean).join(' ');
+// ---- Phase 3.2 Stage 2 helpers (additive) ----
+export const catClass=c=>'cat-'+(Object.hasOwn(CATEGORY_LABELS,c)?c:'other');
+// "Parent — step", cut so the result never exceeds the API's 120-character title limit.
+export const joinTitle=(a,b,max=120)=>{a=cleanName(a);b=cleanName(b);const s=` — ${b}`;return a.length+s.length<=max?a+s:a.slice(0,Math.max(max-s.length-1,1)).trimEnd()+'…'+s};
+// Runs create(item,index) one at a time and stops at the first failure, so a retry never duplicates what was already saved.
+export async function addSequentially(items,create,onAdded){let ok=0;for(let i=0;i<items.length;i++){try{await create(items[i],i);ok++;onAdded?.(i)}catch(error){return{ok,failedAt:i,error}}}return{ok,failedAt:-1,error:null}}

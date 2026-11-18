@@ -71,3 +71,19 @@ input[type=range]{accent-color:var(--pur);padding:0}
 .od{color:#d64545;font-weight:600;font-size:11px}
 .hint{display:block;color:var(--mut);margin-top:4px;font-size:12px}
 .item small{display:block;color:var(--mut)}.item .acts{display:flex;gap:4px;flex-shrink:0}
+
+/* Phase 3.2 Stage 2 */
+.stat.warn b{color:#d64545}
+.chip.done{opacity:.55;text-decoration:line-through}
+.cat-exam,.cat-quiz{background:#dff6fa;color:#128a9f}.cat-project{background:#ffeedd;color:#d27a1f}.cat-other{background:#eceef4;color:#6b7194}
+.dots .cat-exam,.ag .cat-exam,.dots .cat-quiz,.ag .cat-quiz{background:#128a9f}.dots .cat-project,.ag .cat-project{background:#d27a1f}.dots .cat-other,.ag .cat-other{background:#8a90b0}
+.dots .done,.ag .done{opacity:.45}
+.pomo{text-align:center;max-width:520px;margin:0 auto}
+.modes{display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin-bottom:10px}
+.modes button{border:1px solid var(--line);background:#fff;border-radius:99px;padding:7px 14px;font-weight:600;cursor:pointer;min-height:36px}
+.modes button.on{background:var(--pur);color:#fff;border-color:var(--pur)}.modes button:disabled{opacity:.5;cursor:not-allowed}
+.mlbl{font-size:12px;font-weight:700;letter-spacing:.08em;color:var(--pur)}
+.time{font-size:64px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1;margin:10px 0 8px}
+.pomo .prog{display:block;width:100%;margin:0 0 14px}
+.pomo .ctl{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:14px 0 18px}
+.pomo label{text-align:left}
