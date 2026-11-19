@@ -30,15 +30,21 @@ def _labels(notice):
     return {"mock": True, "aiGenerated": False, "source": SOURCE, "notice": notice}
 
 
-def build_plan(title, deadline, hours_per_day, today):
-    """Fixed five-step template spread evenly between today and the deadline (the last step is due on the deadline).
-    The title and requirements are not analysed."""
+def spread_offsets(deadline, count, today):
+    """Day offsets from today for `count` steps spread evenly; the last offset is the deadline (never before today)."""
     days_left = max((parse_date(deadline) - today).days, 0)
+    return [(days_left * (index + 1) + count // 2) // count for index in range(count)]  # rounded half up
+
+
+def build_plan(title, deadline, hours_per_day, today, reason=None):
+    """Fixed five-step template spread evenly between today and the deadline (the last step is due on the deadline).
+    The title and requirements are not analysed. `reason` (plain text) is appended to the notice when AI was wanted
+    but could not be used."""
     count = len(_STEPS)
+    offsets = spread_offsets(deadline, count, today)
     minutes_per_day = int(round(hours_per_day * 60))
     subtasks, previous = [], 0
-    for index, step in enumerate(_STEPS):
-        offset = (days_left * (index + 1) + count // 2) // count  # rounded, and equals days_left for the last step
+    for step, offset in zip(_STEPS, offsets):
         step_days = max(offset - previous, 1)
         previous = offset
         subtasks.append({
@@ -46,8 +52,9 @@ def build_plan(title, deadline, hours_per_day, today):
             "dueDate": (today + timedelta(days=offset)).isoformat(),
             "minutes": minutes_per_day * step_days,
         })
-    result = _labels("Rule-based fallback plan: a fixed five-step template spread evenly before the deadline. "
-                     "No AI model was used.")
+    notice = ("Rule-based fallback plan: a fixed five-step template spread evenly before the deadline. "
+              "No AI model was used.")
+    result = _labels(f"{notice} {reason}" if reason else notice)
     result["subtasks"] = subtasks
     return result
 

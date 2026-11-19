@@ -97,3 +97,14 @@ input[type=range]{accent-color:var(--pur);padding:0}
 .sublist small{white-space:nowrap}.sublist .sacts{display:flex;gap:4px;flex-shrink:0}
 tr.subs td{padding:0 8px 12px 28px;background:#fafaff}.subnote{font-size:12px;color:var(--mut);padding:8px 0 4px}
 .warnbox{background:#fff4e5;color:#a05a00;border-radius:12px;padding:10px 12px;font-size:12px;margin:10px 0}
+
+/* Phase 4.1 Stage 2: AI consent and editable suggestions */
+.consent{background:#f7f6ff;border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:12px 0}
+.consent .cons{flex-direction:row;align-items:flex-start;gap:10px;color:var(--ink);font-size:13px;margin:0}.consent .cons input{margin-top:2px;flex:none}
+.srcline{font-size:13px;margin-bottom:6px}.srcline.gemini,.srcline.groq{color:#4c42b8}.srcline.template,.srcline.demo{color:#a05a00}
+.srow{display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.srow .sfields{display:flex;gap:8px;align-items:center;min-width:0;flex-wrap:wrap}.srow .sfields>input{flex:1 1 180px;min-width:0}
+.srow .smin{display:flex;align-items:center;gap:6px;color:var(--mut);font-size:12px;flex:none}.srow .smin input{width:84px;color:var(--ink)}
+.srow .sacts{grid-column:2;display:flex;gap:4px;flex-wrap:wrap}.srow .lnk:disabled{opacity:.35;cursor:not-allowed}
+.srow .err{grid-column:1 / -1;margin:0}.srow input[aria-invalid="true"]{border-color:#c0392b}
+#more{margin-top:10px}

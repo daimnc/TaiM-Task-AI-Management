@@ -7,6 +7,7 @@ from functools import wraps
 
 from flask import Blueprint, current_app, g, jsonify
 
+import ai_provider
 import dates
 import fallback_ai
 import store
@@ -211,13 +212,44 @@ def get_progress():
     return jsonify(build_progress(store.list_task_docs(_db(), g.uid), dates.today()))
 
 
-# ---- AI endpoints (deterministic fallback, no AI model) ----
+# ---- AI endpoints (Groq/Gemini only with consent and configuration; otherwise the deterministic template) ----
+def _plan_with_ai(fields, today):
+    """(response, None) when Groq or Gemini produced valid steps, otherwise a template reason.
+    Nothing is saved here: the student reviews suggestions and adds them as subtasks themselves."""
+    if fields["aiConsent"] is not True:
+        return None, ai_provider.fallback_notice("consent")
+    provider = current_app.extensions.get("taim_ai")
+    if provider is None:
+        return None, ai_provider.fallback_notice("not_configured")
+    allowed, wait = current_app.extensions["taim_ai_limiter"].allow(g.uid)  # one allowance per real plan request
+    if not allowed:
+        return None, ai_provider.fallback_notice("rate_limited", wait)
+    try:
+        result = provider.generate_steps(fields["title"], fields["requirements"], fields["deadline"], fields["hoursPerDay"])
+        if isinstance(result, ai_provider.ProviderResult):
+            raw, source = result.steps, result.source
+        else:  # backwards-compatible with injected test providers
+            raw, source = result, getattr(provider, "source", ai_provider.SOURCE)
+        steps = ai_provider.sanitize_steps(raw)
+        return ai_provider.build_ai_response(steps, fields["deadline"], today, source), None
+    except ai_provider.ProviderError as problem:
+        reason = problem.reason
+    except Exception as problem:  # never turn an AI problem into a 500; log only the type, never task text or the key
+        reason = type(problem).__name__
+    current_app.logger.warning("AI plan fell back to the template (%s).", reason)
+    return None, ai_provider.fallback_notice(reason)
+
+
 @api.post("/ai/plan")
 @require_auth
 def ai_plan():
     # Reads no stored data, so it is not behind the data-layout gate.
     fields = validate(read_json_object(), PLAN_RULES)
-    return jsonify(fallback_ai.build_plan(fields["title"], fields["deadline"], fields["hoursPerDay"], dates.today()))
+    today = dates.today()
+    response, reason = _plan_with_ai(fields, today)
+    if response is None:
+        response = fallback_ai.build_plan(fields["title"], fields["deadline"], fields["hoursPerDay"], today, reason)
+    return jsonify(response)
 
 
 @api.post("/ai/chat")

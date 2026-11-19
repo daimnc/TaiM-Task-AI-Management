@@ -12,6 +12,15 @@ def _split_csv(value):
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _bounded_float(value, default, low, high):
+    """A number from the environment, kept inside [low, high]. Missing or invalid values use the default."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return min(max(number, low), high) if number == number else default  # NaN -> default
+
+
 class Config:
     BASE_DIR = Path(__file__).resolve().parent
 
@@ -33,3 +42,18 @@ class Config:
 
     # Reject request bodies larger than 64 KB (Flask returns 413).
     MAX_CONTENT_LENGTH = 64 * 1024
+
+    # ---- Optional AI providers for /api/ai/plan ----
+    # Groq is primary; Gemini is secondary. A single shared timeout covers both attempts.
+    # Keys remain in backend/.env and must never be committed.
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+    GROQ_MODEL = os.getenv("GROQ_MODEL", "").strip()
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "").strip()
+    AI_TOTAL_TIMEOUT_SECONDS = _bounded_float(os.getenv("AI_TOTAL_TIMEOUT_SECONDS"), 12.0, 3.0, 12.0)
+    # Retained for direct Gemini-provider tests and backwards-compatible configuration.
+    GEMINI_TIMEOUT_SECONDS = _bounded_float(os.getenv("GEMINI_TIMEOUT_SECONDS"), 10.0, 3.0, 12.0)
+
+    # Per signed-in student. One real planning request counts once, regardless of provider failover.
+    AI_RATE_PER_MINUTE = 3
+    AI_RATE_PER_DAY = 20

@@ -6,7 +6,7 @@ Group 2, BSCS-3A, APPDEV final project.
 - **Frontend:** dependency-free ES-module app (vanilla JS + CSS, hash routing, no build step) in `frontend/`.
 - **Backend:** Python Flask API in `backend/`, reading and writing Cloud Firestore through the Firebase Admin SDK.
 - **Authentication:** Firebase Authentication (email/password and Google), handled in the browser. The backend verifies every request's Firebase ID token.
-- **"AI" features:** deterministic, rule-based fallbacks only. **No AI model is connected** (see *AI features* below).
+- **AI task planner:** Groq primary, Google Gemini secondary, with a deterministic local fallback when providers are unavailable.
 
 ## Architecture
 
@@ -43,6 +43,13 @@ Configuration is read from `backend/.env` (never commit it):
 | `TAIM_UTC_OFFSET_HOURS` | Timezone used for "today" on the server | `8` (Philippines) |
 | `FLASK_DEBUG` | `true` enables Flask debug mode | `false` |
 | `SECRET_KEY` | Flask secret key | development-only placeholder |
+| `GROQ_API_KEY` | Optional Groq API key (primary AI provider) | unset |
+| `GROQ_MODEL` | Groq model ID, e.g. `openai/gpt-oss-120b` | unset |
+| `GEMINI_API_KEY` | Optional Google Gemini API key (secondary provider) | unset |
+| `GEMINI_MODEL` | Gemini model ID | unset |
+| `AI_TOTAL_TIMEOUT_SECONDS` | Shared timeout budget for Groq and Gemini attempts | `12` |
+
+Never commit `.env` or share its API keys. The AI planner sends only the task title, requirements, deadline and available hours per day after the student gives per-request consent.
 
 The Admin SDK service-account key must be placed at `backend/keys/serviceAccount.json`. It is git-ignored; never commit it or put it in the frontend.
 Without `FIREBASE_PROJECT_ID` or the key file the server still starts, but protected routes answer `503` (after the token check).
@@ -79,18 +86,17 @@ Backend tests use a fake Firestore and fake token verification, so they need no 
     python -m unittest tests.test_api -v          # no extra packages
     python -m pytest tests/test_api.py -v         # needs requirements-dev.txt
 
-`tests/test_api.py` contains 44 tests covering authentication, task/settings/reminder-preference CRUD and validation, per-student isolation, progress statistics, and the AI fallback endpoints. There are no automated frontend tests yet.
+`tests/test_api.py` contains 44 tests covering authentication, task/settings/reminder-preference CRUD and validation, per-student isolation, progress statistics, and the AI fallback endpoints. Frontend tests use Node.js built-in test runner; run from the project root with `node --test frontend/tests/*.test.mjs`.
 
-## Current data layout (as implemented today)
+## Current data layout
 
-Every path starts with the verified Firebase UID:
+The V2 backend uses these top-level Firestore collections:
 
-    users/{uid}/tasks/{taskId}            title, course, category, deadline, priority, progress,
-                                          completedOn (server-set when progress reaches 100), createdAt, updatedAt
-    users/{uid}/preferences/settings      name, program, leadDays, sessionMinutes, weeklySummary
-    users/{uid}/preferences/reminders     deadline, dailySummary, progressCheckin, quietHours
+    students/{uid}                 profile, settings and reminder preferences
+    subjects/{subject_id}          subject_id, student_id, subject_name
+    tasks/{task_id}                task details, student_id, subject_id and optional embedded subtasks[]
 
-This layout is **being replaced** (see *Planned: data-model migration*). Until that work is finished and verified, this is the layout in use.
+Every student-owned record is associated with the verified Firebase UID. The backend checks ownership before returning or changing an individual subject or task. Legacy `users/{uid}/...` records are not read, written or deleted by the V2 store.
 
 ## API (as implemented today)
 
@@ -115,42 +121,25 @@ Sign-in and registration are done by the Firebase SDK in the browser; there are 
 
 ## AI features
 
-`/ai/plan` and `/ai/chat` are **deterministic fallbacks, not AI**. Responses carry `mock: true`, `aiGenerated: false`, `source: "deterministic-fallback"` and a `notice`, and the UI says so.
+`POST /api/ai/plan` supports real AI suggestions when providers are configured and the student explicitly consents for that request.
 
-- **Planner:** a fixed five-step template spread evenly before the deadline. The title and requirements are not analysed.
-- **Assistant:** keyword rules over the student's own tasks.
-- **Progress insight:** a rule-based summary, labelled as such.
+- **Provider order:** Groq first, then Google Gemini if Groq fails. If neither provider produces valid output within the shared timeout, TAiM returns its deterministic five-step template.
+- **Data disclosure:** only the task title, requirements, deadline and available hours per day are sent. No student ID, email, name, other tasks or stored records are sent to either provider.
+- **Review before saving:** generated steps are suggestions only. The student can edit, reorder, remove and select steps; nothing is stored until the student explicitly adds selected steps to an existing task.
+- **Provider safety:** API keys are sent in authorization headers, redirects are refused, model output is sanitized, and provider errors do not expose keys or response bodies. Groq reasoning output is not used.
+- **Fallback:** the built-in deterministic template remains available without provider credentials, without consent, or when both providers fail.
 
-To add a real provider later, replace `build_plan` / `build_reply` in `backend/fallback_ai.py` and keep the response shape. No paid service is required or assumed.
+`POST /api/ai/chat` remains a deterministic keyword-based helper. The Progress insight is also rule-based; neither is currently connected to an AI model.
 
 ## Known limitations (current code)
 
-- No subjects page (a task has only a free-text `course`), no real subtasks (the planner saves each accepted step as a separate task), no Pomodoro timer, no PDF/module decomposer, no separate Projects page.
+- No Pomodoro timer, PDF/module decomposer or separate Projects page. Tasks support embedded subtasks; the AI planner lets students review and edit suggestions before adding selected steps to an existing task.
 - Reminders are preferences only; nothing is delivered. Procrastination analysis and weekly summaries are not implemented.
 - In real mode the frontend's "today" is the browser's local date, while the backend uses `TAIM_UTC_OFFSET_HOURS`. They agree for students in the same timezone as the server setting.
 
-## Planned: data-model migration (not implemented yet)
+## Data-model migration status
 
-Nothing in this section exists in the code today. It records the agreed design and its limits.
-
-**Target layout:** top-level collections `students`, `subjects`, `tasks` (with `subtasks`), later `progress_logs`, `reminders` (with `responses`) and `weekly_summaries` (with `insights`). `password_hash` is intentionally omitted because Firebase Authentication holds credentials. `program` and `weeklySummary` are dropped; `leadDays`, `sessionMinutes` and reminder preferences are kept.
-
-**Rules the migration must follow**
-
-- The student identity always comes from the verified ID token, never from a browser-supplied value. Every read, update and delete of `students`, `subjects` and `tasks` checks ownership. Subtasks are reachable only through an owned parent task.
-- Dry-run is the default; data is written only with an explicit `--apply`.
-- Students are found with `collection("users").list_documents()`, so students whose parent document is missing are included.
-- Existing target documents are never overwritten, and legacy documents are never modified or deleted. Legacy data stays untouched.
-- Subject IDs are deterministic (derived from the student and the normalised subject name), so re-running always maps the same student's same subject to the same ID.
-- A student whose records are invalid, conflicting or would migrate only partially is flagged and not written; the run never reports success in that case. Re-runs are idempotent, and writes respect Firestore's 500-write batch limit.
-- A subject cannot be deleted while tasks still reference it; the API returns a clear validation error until those tasks are reassigned or deleted.
-- The app is **not** switched to the new collections until migration and verification are complete. Planned gate: the new data routes stay disabled by default (`TAIM_ENABLE_V2`, off) until a clean dry-run, `--apply`, second dry-run and manual checklist have all passed. Stop the old backend writing legacy data after the final dry-run.
-
-**Rollback and recovery limits**
-
-- **Before the new layout is enabled:** rollback is complete. Legacy data is untouched, so reverting the code restores the old behaviour.
-- **After it is enabled:** new writes (tasks, subjects, subtasks, settings, reminder preferences) exist only in the new collections. Reverting the code would hide them from the old app. They are not deleted, but there is no reverse migration, and re-running the migration never overwrites or merges newer data back into legacy.
-- No export or backup tooling is provided (Firestore managed export requires a paid plan). A reverse script would be a separate, explicitly approved task.
+The V2 data layout is implemented in the backend. The migration utility remains a separate, explicit operation: it defaults to dry-run, and writes legacy records only when invoked with `--apply`. The application does not automatically migrate or delete legacy data. Keep `TAIM_ENABLE_V2` disabled until the migration and verification steps for the target Firebase project have been completed.
 
 ## Frontend structure
 

@@ -171,6 +171,8 @@ PLAN_RULES = {
     "requirements": (_text(2000, allow_empty=True), False, ""),
     "deadline": (_date, True, None),
     "hoursPerDay": (_hours_per_day, False, 1.0),
+    # Explicit consent to send the task text to Google Gemini. Only a real true counts; the default is no.
+    "aiConsent": (_bool, False, False),
 }
 
 CHAT_RULES = {

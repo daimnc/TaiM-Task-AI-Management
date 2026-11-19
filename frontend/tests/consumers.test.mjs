@@ -175,7 +175,7 @@ test('B planner: only appends subtasks to an existing parent; no new tasks or su
   assert.doesNotMatch(p, /dueDate|fmtDate\(s\./); assert.match(p, /q\.get\('task'\)/); // deep link ?task=ID preselects the parent
   assert.match(p, /planStepsToSubtasks/); assert.match(p, /const add=guard\(/); assert.match(p, /const gen=guard\(/);
   assert.match(p, /addingReopens\(p\)&&!confirm\(/); assert.match(p, /subtaskCapacity/); assert.match(p, /add\.disabled=!n\|\|n>cap/);
-  assert.match(p, /TEMPLATE PLAN · NO AI MODEL USED/); assert.match(p, /href="#\/tasks"/); // empty state points to My Tasks
+  assert.match(p, /planSource\(r\)/); assert.match(src('taskStats.js'), /TEMPLATE PLAN · NO AI MODEL USED/); assert.match(p, /href="#\/tasks"/); // empty state points to My Tasks
 });
 
 test('B My Tasks: subtask rows with Complete / Reopen / Delete (confirmed), one lock, local replace; Done and Reopen hidden for parents with subtasks', () => {

@@ -347,7 +347,7 @@ const SUBTASK_RULES = { title: [rule.text(120), true], estimated_minutes: [MINUT
 const SUBTASK_FORBIDDEN = { subtask_id: 'is set by the server.', status: 'is set by the server: new subtasks start as not_started.' };
 const SETTINGS_RULES = { full_name: [rule.text(80), false], leadDays: [rule.oneOf(LEAD_DAYS), false], sessionMinutes: [rule.oneOf(SESSION_MINUTES), false] };
 const REMINDER_RULES = Object.fromEntries(Object.keys(REMINDER_DEFAULTS).map(k => [k, [rule.bool, false]]));
-const PLAN_RULES = { title: [rule.text(120), true], requirements: [rule.text(2000, true), false, ''], deadline: [rule.date, true], hoursPerDay: [rule.hours, false, 1] };
+const PLAN_RULES = { title: [rule.text(120), true], requirements: [rule.text(2000, true), false, ''], deadline: [rule.date, true], hoursPerDay: [rule.hours, false, 1], aiConsent: [rule.bool, false, false] };
 const CHAT_RULES = { message: [rule.text(1000), true] };
 
 function validateBody(body, rules, partial = false) {
@@ -494,7 +494,9 @@ export function mockV2Request(db, method, path, body, ctx = {}) {
     case 'POST /ai/plan': {
       const f = validateBody(readObj(body), PLAN_RULES), steps = ['Define scope and outline', 'Gather and review sources', 'Draft main sections', 'Revise and add citations', 'Final proofread and submit'];
       const span = Math.max(dayNumber(f.deadline) - dayNumber(today), 1), minutes = Math.round(f.hoursPerDay * 30);
-      return { ...MOCK_LABEL, notice: 'Browser demo plan: a fixed five-step template. No AI model was used.', subtasks: steps.map((title, i) => ({ title, dueDate: addDaysIso(today, Math.round(span * (i + 1) / steps.length)), minutes })) };
+      // Same consent contract as the backend: only a real true counts. The browser demo never calls any AI, so it always answers with the template.
+      const notice = 'Browser demo plan: a fixed five-step template. No AI model was used.' + (f.aiConsent === true ? '' : ' AI suggestions were not used because the consent box was not ticked.');
+      return { ...MOCK_LABEL, notice, subtasks: steps.map((title, i) => ({ title, dueDate: addDaysIso(today, Math.round(span * (i + 1) / steps.length)), minutes })) };
     }
     case 'POST /ai/chat': {
       const q = validateBody(readObj(body), CHAT_RULES).message.toLowerCase(), open = db.tasks.filter(t => t.status !== 'completed'); let reply;

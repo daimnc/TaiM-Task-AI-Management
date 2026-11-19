@@ -1,0 +1,19 @@
+TAiM Phase 4.1 Stage 3 patch
+==============================
+
+This patch contains only the files changed for the approved Groq -> Gemini -> deterministic fallback integration and its tests/documentation.
+
+Apply by extracting this ZIP into the root of your existing TAiM project folder and allowing these 11 files to be replaced. Before doing so, make a backup copy of the current project folder or at least these 11 files.
+
+This ZIP intentionally excludes:
+- backend/.env and all API keys
+- Firebase service-account credentials
+- .git, virtual environments, and Python __pycache__ files
+
+After applying, from the project root run the frontend tests:
+    node --test frontend/tests/*.test.mjs
+
+From the backend folder, with the project's virtual environment activated, run:
+    python -m pytest tests -v
+
+No Git commit or push is included. Review the changes and test results before committing.

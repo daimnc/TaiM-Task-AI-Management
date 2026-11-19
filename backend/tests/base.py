@@ -6,6 +6,10 @@ import unittest
 from datetime import date
 
 os.environ["FIREBASE_PROJECT_ID"] = ""  # keep the tests away from any real Firebase project (.env is not overridden)
+os.environ["GEMINI_API_KEY"] = ""  # tests never use a real Gemini key or model (.env is not overridden)
+os.environ["GEMINI_MODEL"] = ""
+os.environ["GROQ_API_KEY"] = ""  # tests never use a real Groq key or model
+os.environ["GROQ_MODEL"] = ""
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
@@ -24,7 +28,7 @@ class ApiTestCase(unittest.TestCase):
 
     def setUp(self):
         self.db = FakeFirestore()
-        self.app = create_app(db=self.db, token_verifier=fake_verifier, enable_v2=self.enable_v2)
+        self.app = create_app(db=self.db, token_verifier=fake_verifier, enable_v2=self.enable_v2, ai_provider=None)
         self.client = self.app.test_client()
         self._real_today = dates.today
         dates.today = lambda: TODAY
