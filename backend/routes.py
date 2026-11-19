@@ -10,11 +10,13 @@ from flask import Blueprint, current_app, g, jsonify
 import ai_provider
 import dates
 import fallback_ai
+import insights
+import insights_ai
 import store
 from errors import ApiError
 from progress import build_progress
 from security import require_auth
-from validation import (CHAT_RULES, PLAN_RULES, REMINDER_RULES, SETTINGS_RULES, SUBJECT_RULES, TASK_CREATE_FORBIDDEN,
+from validation import (CHAT_RULES, INSIGHTS_RULES, PLAN_RULES, REMINDER_RULES, SETTINGS_RULES, SUBJECT_RULES, TASK_CREATE_FORBIDDEN,
                         TASK_RULES, TASK_UPDATE_FORBIDDEN, TASK_UPDATE_RULES, read_json_object, reject_fields,
                         validate, validate_subtask_batch)
 
@@ -259,3 +261,19 @@ def ai_chat():
     fields = validate(read_json_object(), CHAT_RULES)
     tasks = store.list_tasks(_db(), g.uid)
     return jsonify(fallback_ai.build_reply(fields["message"], tasks, dates.today()))
+
+
+@api.post("/ai/insights")
+@require_auth
+@require_v2
+def ai_insights():
+    """Phase 4.2. Facts are calculated here from the student's own tasks. Only with aiConsent: true and a configured
+    provider are anonymised numbers sent to Groq/Gemini; otherwise rule-based text is returned. Nothing is saved."""
+    fields = validate(read_json_object(), INSIGHTS_RULES)
+    facts = insights.build_facts(store.list_task_docs(_db(), g.uid), store.list_subjects(_db(), g.uid), dates.today())
+    result = insights_ai.build_insights_response(
+        facts, fields["aiConsent"], current_app.extensions.get("taim_ai"),
+        current_app.extensions["taim_insights_limiter"], g.uid, current_app.logger)
+    response = jsonify(result)
+    response.headers["Cache-Control"] = "no-store"
+    return response

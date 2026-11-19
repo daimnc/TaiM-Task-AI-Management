@@ -175,6 +175,11 @@ PLAN_RULES = {
     "aiConsent": (_bool, False, False),
 }
 
+# Phase 4.2: explicit consent to send anonymised, aggregate numbers (no titles, names or dates) to Groq / Google Gemini.
+INSIGHTS_RULES = {
+    "aiConsent": (_bool, False, False),
+}
+
 CHAT_RULES = {
     "message": (_text(1000), True, None),
 }

@@ -57,3 +57,7 @@ class Config:
     # Per signed-in student. One real planning request counts once, regardless of provider failover.
     AI_RATE_PER_MINUTE = 3
     AI_RATE_PER_DAY = 20
+
+    # Phase 4.2 AI Insights: its own limiter, separate from the planner's. Counts only real provider requests.
+    INSIGHTS_RATE_PER_MINUTE = 2
+    INSIGHTS_RATE_PER_DAY = 10

@@ -406,6 +406,31 @@ const topOpen = open => {
 };
 const MOCK_LABEL = { mock: true, aiGenerated: false, source: 'mock-client' };
 
+// Phase 4.2 browser demo for POST /ai/insights. A fixed SAMPLE: it is not calculated from the demo tasks and never claims AI.
+// Same response shape as the backend, so the Progress page can be tried without a server.
+const INSIGHTS_RULES = { aiConsent: [rule.bool, false, false] };
+const MOCK_INSIGHTS = {
+  ...MOCK_LABEL, notice: 'Browser demo sample with made-up numbers. No AI model was used and nothing was calculated from your tasks.',
+  summary: 'Sample: 4 open and 6 completed tasks; 1 overdue and 2 due within the next 7 days.',
+  insights: [
+    { area: 'completion', text: 'Sample: 6 of 10 tasks completed (60%); 4 open (2 in progress, 2 not started).' },
+    { area: 'workload', text: 'Sample: Open tasks by subject: Programming 2 (50%); Databases 2 (50%).' },
+    { area: 'deadlines', text: 'Sample: 1 overdue, 1 due today, 1 due in the next 1 to 3 days, 1 due in 4 to 7 days. No heavy stretch.' },
+    { area: 'patterns', text: 'Sample: Not enough data yet to describe your patterns.' }],
+  suggestions: [{ text: 'Sample: start with your overdue task, then the one due today.', area: 'deadlines' }],
+  facts: {
+    asOf: '2026-11-01',
+    completion: { totalTasks: 10, completed: 6, open: 4, inProgress: 2, notStarted: 2, completionRate: 60, openSubtasksDone: 0, openSubtasksTotal: 0, weeklyCompletion: [1, 2, 2, 1], weeklyChange: -50, weeklyChangeKnown: true },
+    workload: { openTasks: 4, subjects: [{ label: 'S1', name: 'Programming', openTasks: 2, sharePct: 50, overdue: 1, highImportance: 1, dueWithin7Days: 1, remainingMinutes: 0, unestimatedTasks: 2 }, { label: 'S2', name: 'Databases', openTasks: 2, sharePct: 50, overdue: 0, highImportance: 0, dueWithin7Days: 1, remainingMinutes: 0, unestimatedTasks: 2 }], otherSubjects: { count: 0, openTasks: 0 }, remainingMinutesTotal: 0, unestimatedTasksTotal: 4, topSubjectShare: 50, concentrated: false },
+    deadlines: { overdue: 1, dueToday: 1, dueIn1To3: 1, dueIn4To7: 1, dueLater: 0, dueWithin7Days: 3, noValidDeadline: 0, perDay: [1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0], peakDayOffset: 0, peakDayCount: 1, soonDays: 3, dueWithin3Days: 2, heavy: false, heavyReason: null, upcoming: [] },
+    patterns: { completedTotal: 6, completedWithDate: 3, completedWithDateAndDeadline: 3, minForPatterns: 5, minForWeekday: 8, enoughForPatterns: false, onTimeRate: null, lateSharePct: null, lastMinuteSharePct: null, medianDaysBeforeDeadline: null, weekdayCounts: [0, 0, 0, 0, 0, 0, 0], weekdayPattern: null },
+    dataQuality: { completedWithoutDate: 3, openWithoutValidDeadline: 0 },
+  },
+  limitations: ['Completion dates are the day a task was marked complete in TAiM. They are not the time you actually spent studying, and the work may have happened on other days.',
+    'Only tasks that are completed right now are counted. Tasks that were reopened or deleted are not part of this history, and nothing is assumed about them.'],
+};
+export const mockInsights = () => structuredClone(MOCK_INSIGHTS);
+
 export function mockV2Request(db, method, path, body, ctx = {}) {
   const today = ctx.todayIso || new Date().toISOString().slice(0, 10);
   const sm = path.match(/^\/tasks\/([^/]+)\/subtasks(?:\/([^/]+)(?:\/(complete|reopen))?)?$/);
@@ -498,6 +523,7 @@ export function mockV2Request(db, method, path, body, ctx = {}) {
       const notice = 'Browser demo plan: a fixed five-step template. No AI model was used.' + (f.aiConsent === true ? '' : ' AI suggestions were not used because the consent box was not ticked.');
       return { ...MOCK_LABEL, notice, subtasks: steps.map((title, i) => ({ title, dueDate: addDaysIso(today, Math.round(span * (i + 1) / steps.length)), minutes })) };
     }
+    case 'POST /ai/insights': validateBody(readObj(body), INSIGHTS_RULES); return mockInsights(); // same consent contract as the backend: only a real true/false is accepted
     case 'POST /ai/chat': {
       const q = validateBody(readObj(body), CHAT_RULES).message.toLowerCase(), open = db.tasks.filter(t => t.status !== 'completed'); let reply;
       if (/first|priorit|start/.test(q)) { const t = topOpen(open); reply = t ? `Based on your recorded tasks, start with "${t.title}" (${t.progress_pct}% done, ${dueWords(dayNumber(t.deadline) - dayNumber(today))}). Try a 25-minute session.` : 'You have no open tasks.' }

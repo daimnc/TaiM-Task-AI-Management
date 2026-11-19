@@ -8,6 +8,7 @@ Rules this module follows:
   * Everything the model returns is untrusted. `sanitize_steps` cleans it and rejects bad output before it is used.
   * Provider failures are failover-safe; if both providers fail, the route returns the built-in template.
   * Nothing here reads or writes the database. The model only SUGGESTS steps; the student reviews and adds them.
+  * Phase 4.2 adds `generate_json` (used only by insights_ai.py) with the same transport, redirect, size and key rules.
 """
 import http.client
 import json
@@ -45,12 +46,80 @@ _SYSTEM_PROMPT = (
 )
 
 
-class ProviderError(Exception):
-    """Carries only a short reason code (timeout, network, quota, http_error, malformed, invalid_output)."""
+_SAFE_PROVIDER_CODE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
-    def __init__(self, reason):
+
+class ProviderError(Exception):
+    """Carries only a short reason code (timeout, network, quota, http_error, malformed, invalid_output).
+
+    HTTP failures may also carry `status_code` (an int), `category` (a fixed word from `_http_category`), and
+    `provider_code` (a short safe identifier from the provider's JSON error object, e.g. `json_validate_failed`).
+    None of these ever hold a message body, header, URL, prompt or key.
+    """
+
+    def __init__(self, reason, status_code=None, category=None, provider_code=None):
         super().__init__(reason)
         self.reason = reason
+        self.status_code = status_code if isinstance(status_code, int) and 100 <= status_code <= 599 else None
+        self.category = category
+        self.provider_code = (
+            provider_code if isinstance(provider_code, str) and _SAFE_PROVIDER_CODE_RE.match(provider_code) else None
+        )
+
+
+HTTP_CATEGORIES = frozenset({"redirect_refused", "rate_limit", "auth", "not_found", "bad_request", "server", "other"})
+
+
+def _http_category(code):
+    """A fixed, safe word for an HTTP status. Never derived from the response body or headers."""
+    if 300 <= code < 400:
+        return "redirect_refused"
+    if code == 429:
+        return "rate_limit"
+    if code in (401, 403):
+        return "auth"
+    if code == 404:
+        return "not_found"
+    if 400 <= code < 500:
+        return "bad_request"
+    if code >= 500:
+        return "server"
+    return "other"
+
+
+def _extract_provider_code(exc):
+    """Read only a short machine-readable error code/type from an HTTP error JSON body, never arbitrary message text."""
+    try:
+        raw = exc.read(4096)
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    err = data.get("error")
+    if not isinstance(err, dict):
+        return None
+    for key in ("code", "type", "status"):
+        value = err.get(key)
+        if isinstance(value, str) and _SAFE_PROVIDER_CODE_RE.match(value):
+            return value
+    return None
+
+
+def _http_problem(code, provider_code=None):
+    """The ProviderError for an HTTP error status. Classification is unchanged: only 429 is "quota", everything else is
+    "http_error". The integer status and its fixed category are kept for diagnostics."""
+    return ProviderError(
+        "quota" if code == 429 else "http_error",
+        status_code=code,
+        category=_http_category(code),
+        provider_code=provider_code,
+    )
 
 
 # ---- Messages shown to the student when the built-in template is used instead of AI (plain words, no internals) ----
@@ -130,6 +199,35 @@ def _read_response_with_deadline(response, timeout):
     return b"".join(chunks)
 
 
+def _send_request(request, timeout_budget):
+    """Used by `generate_json`: open the request through the redirect-safe opener and read the body within the budget.
+    Same reason codes as generate_steps. `from None` keeps any original exception text (which could echo URLs) out."""
+    request_deadline = time.monotonic() + timeout_budget
+    try:
+        with _build_opener().open(request, timeout=timeout_budget) as response:
+            remaining = request_deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError()
+            raw = _read_response_with_deadline(response, remaining)
+    except urllib.error.HTTPError as exc:
+        code = exc.code
+        provider_code = _extract_provider_code(exc)
+        try:
+            exc.close()
+        except Exception:
+            pass
+        raise _http_problem(code, provider_code=provider_code) from None
+    except TimeoutError:
+        raise ProviderError("timeout") from None
+    except urllib.error.URLError as exc:
+        raise ProviderError("timeout" if isinstance(exc.reason, (TimeoutError, socket.timeout)) else "network") from None
+    except (OSError, http.client.HTTPException, ValueError):
+        raise ProviderError("network") from None
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise ProviderError("malformed")
+    return raw
+
+
 class ProviderResult:
     """Successful provider output with an explicit source label."""
 
@@ -181,7 +279,7 @@ class GeminiProvider:
             except Exception:  # closing is only housekeeping; the reason code is what matters
                 pass
             # Only 429 means "quota". 403 (and 400, 401, 5xx, refused redirects) are configuration or service problems.
-            raise ProviderError("quota" if code == 429 else "http_error") from None
+            raise _http_problem(code) from None
         except TimeoutError:
             raise ProviderError("timeout") from None
         except urllib.error.URLError as exc:
@@ -198,6 +296,39 @@ class GeminiProvider:
             raise ProviderError("malformed") from None
         return parse_steps(text)
 
+    def generate_json(self, system_prompt, user_text, timeout=None, max_tokens=1500):
+        """Phase 4.2: one JSON-only completion. Returns the model's raw TEXT (untrusted; the caller parses and checks it)."""
+        body = {
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_text}]}],
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens, "responseMimeType": "application/json"},
+        }
+        request = urllib.request.Request(
+            f"{API_BASE}{self.model}:generateContent", data=json.dumps(body).encode("utf-8"), method="POST",
+            headers={"Content-Type": "application/json", "x-goog-api-key": self._api_key, "User-Agent": "TAiM/1.0"})
+        raw = _send_request(request, self.timeout if timeout is None else timeout)
+        try:
+            return json.loads(raw)["candidates"][0]["content"]["parts"][0]["text"]
+        except (ValueError, KeyError, IndexError, TypeError):
+            raise ProviderError("malformed") from None
+
+
+
+# Confirmed Groq models supporting `include_reasoning` and `reasoning_effort` (Groq Reasoning docs).
+_GROQ_INCLUDE_REASONING_MODELS = frozenset({
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-safeguard-20b",
+    "qwen/qwen3.8-27b",
+    "minimaxai/minimax-m2.7",
+    "meta-models/muse-spark-open",
+})
+_GROQ_LOW_EFFORT_MODELS = frozenset({
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b",
+    "meta-models/muse-spark-open",
+})
 
 
 class GroqProvider:
@@ -249,7 +380,7 @@ class GroqProvider:
                 exc.close()
             except Exception:
                 pass
-            raise ProviderError("quota" if code == 429 else "http_error") from None
+            raise _http_problem(code) from None
         except TimeoutError:
             raise ProviderError("timeout") from None
         except urllib.error.URLError as exc:
@@ -266,6 +397,29 @@ class GroqProvider:
         except (ValueError, KeyError, IndexError, TypeError):
             raise ProviderError("malformed") from None
         return parse_steps(content)
+
+    def generate_json(self, system_prompt, user_text, timeout=None, max_tokens=2048):
+        """Phase 4.2: one JSON-only completion. Returns message.content as raw TEXT (untrusted). Reasoning fields are never read."""
+        body = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}],
+            "temperature": 0.2,
+            "max_completion_tokens": max_tokens,
+            "response_format": {"type": "json_object"},
+        }
+        model_id = self.model.strip().lower()
+        if model_id in _GROQ_INCLUDE_REASONING_MODELS:
+            body["include_reasoning"] = False
+        if model_id in _GROQ_LOW_EFFORT_MODELS:
+            body["reasoning_effort"] = "low"
+        request = urllib.request.Request(
+            GROQ_API_URL, data=json.dumps(body).encode("utf-8"), method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._api_key}", "User-Agent": "TAIM/1.0"})
+        raw = _send_request(request, self.timeout if timeout is None else timeout)
+        try:
+            return json.loads(raw)["choices"][0]["message"]["content"]
+        except (ValueError, KeyError, IndexError, TypeError):
+            raise ProviderError("malformed") from None
 
 
 class ProviderChain:

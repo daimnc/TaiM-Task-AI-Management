@@ -108,3 +108,18 @@ tr.subs td{padding:0 8px 12px 28px;background:#fafaff}.subnote{font-size:12px;co
 .srow .sacts{grid-column:2;display:flex;gap:4px;flex-wrap:wrap}.srow .lnk:disabled{opacity:.35;cursor:not-allowed}
 .srow .err{grid-column:1 / -1;margin:0}.srow input[aria-invalid="true"]{border-color:#c0392b}
 #more{margin-top:10px}
+
+/* Phase 4.2: AI Insights card (Progress page) */
+#ins{margin-bottom:18px}.ins-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}.ins-head h3{margin:0}
+.ins-out{margin-top:16px;min-width:0}.ins-result{display:flex;flex-direction:column;gap:14px}
+.ins-block{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:#fff}.ins-block.ai{background:#f7f6ff;border-color:#dcd8fb}.ins-block.facts-block{background:#fafbfe}
+.ins-block h4{margin:0 0 8px;font-size:13px}.ins-block h4 .tag{display:inline;margin-left:6px;font-weight:400}.ins-block h4:not(:first-child){margin-top:14px}
+.ins-sum{font-weight:600;line-height:1.6;margin-bottom:8px}
+.ins-list,.tip-list,.lim-list{margin:0;padding-left:18px;line-height:1.65}.ins-list li{margin-bottom:8px}.ins-list li b{font-size:12px;color:var(--pur);text-transform:uppercase;letter-spacing:.03em}.ins-list li p{margin:2px 0 0}
+.tip-list li,.lim-list li{margin-bottom:6px;font-size:13px}.lim-list{color:var(--mut)}
+.tag{color:var(--mut);font-size:11px}
+.tip-list .tag{display:block;margin:0 0 2px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}.tip-list .tip-text{display:block}
+.facts-block section{margin-bottom:10px}.facts-block h5{margin:0 0 4px;font-size:12px;color:var(--pur)}
+.facts{margin:0;display:grid;gap:2px}.facts>div{display:flex;justify-content:space-between;gap:16px;padding:4px 0;border-bottom:1px dashed var(--line);font-size:13px}.facts>div:last-child{border-bottom:0}
+.facts dt{color:var(--mut);min-width:0}.facts dd{margin:0;text-align:right;font-weight:600;min-width:0}
+@media(max-width:700px){.facts>div{flex-direction:column;gap:0}.facts dd{text-align:left}}
