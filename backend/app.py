@@ -2,6 +2,7 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 
 from ai_provider import RateLimiter, provider_from_config
+import assistant_ai
 from config import Config
 from errors import register_error_handlers
 from firebase import initialize_firebase
@@ -43,6 +44,8 @@ def create_app(db=None, token_verifier=None, enable_v2=None, ai_provider=_FROM_C
     app.extensions["taim_ai_limiter"] = RateLimiter(Config.AI_RATE_PER_MINUTE, Config.AI_RATE_PER_DAY)
     app.extensions["taim_insights_limiter"] = RateLimiter(Config.INSIGHTS_RATE_PER_MINUTE, Config.INSIGHTS_RATE_PER_DAY)
     app.extensions["taim_planner_limiter"] = RateLimiter(Config.PLANNER_ASSIST_RATE_PER_MINUTE, Config.PLANNER_ASSIST_RATE_PER_DAY)
+    app.extensions["taim_assistant_limiter"] = RateLimiter(Config.ASSISTANT_RATE_PER_MINUTE, Config.ASSISTANT_RATE_PER_DAY)
+    app.extensions["taim_assistant_anonymizer"] = assistant_ai.AssistantAnonymizer()
 
     register_error_handlers(app)
 

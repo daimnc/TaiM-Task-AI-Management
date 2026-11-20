@@ -62,6 +62,10 @@ class Config:
     INSIGHTS_RATE_PER_MINUTE = 2
     INSIGHTS_RATE_PER_DAY = 10
 
+    # Phase 4.4 AI Assistant: per authenticated student, counts provider attempts only.
+    ASSISTANT_RATE_PER_MINUTE = 5
+    ASSISTANT_RATE_PER_DAY = 30
+
     # Phase 4.3 Planner Assistance: its own limiter, separate from the planner's and insights'. Counts only real provider requests.
     PLANNER_ASSIST_RATE_PER_MINUTE = 2
     PLANNER_ASSIST_RATE_PER_DAY = 10

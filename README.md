@@ -111,7 +111,7 @@ Errors are JSON: `{"detail": "<text>"}`, with an `errors` object (field → mess
 | GET / PUT `/reminders/preferences` | `{deadline, dailySummary, progressCheckin, quietHours}` (booleans) |
 | GET `/progress` | → `{completionRate, onTimeRate, completed, overdue, weeklyChange, weeklyProductivity[7], weeklyCompletion[4], insight, insightSource}` |
 | POST `/ai/plan` | `{title, requirements, deadline, hoursPerDay}` → `{subtasks:[{title, dueDate, minutes}], mock, aiGenerated, source, notice}` |
-| POST `/ai/chat` | `{message}` → `{reply, mock, aiGenerated, source, notice}` |
+| POST `/ai/chat` | `{message, aiConsent?, history?}` → `{reply, mock, aiGenerated, source, notice}` |
 
 `Task`: `{id, title, course, category: Assignment|Research|Project|Examination, deadline: "YYYY-MM-DD", priority: High|Medium|Low, progress: 0-100}`. Progress 100 means done.
 
@@ -129,7 +129,7 @@ Sign-in and registration are done by the Firebase SDK in the browser; there are 
 - **Provider safety:** API keys are sent in authorization headers, redirects are refused, model output is sanitized, and provider errors do not expose keys or response bodies. Groq reasoning output is not used.
 - **Fallback:** the built-in deterministic template remains available without provider credentials, without consent, or when both providers fail.
 
-`POST /api/ai/chat` remains a deterministic keyword-based helper. The Progress insight is also rule-based; neither is currently connected to an AI model.
+`POST /api/ai/chat` supports optional Groq → Gemini responses when the student gives per-message consent. The request accepts a 1–1000 character `message`, optional boolean `aiConsent` (default `false`), and up to six previous `{role, text}` messages (`role` is `user` or `assistant`; no system/developer role is accepted). The backend loads only the authenticated student's task and subject records. Before provider calls, task titles and subject names in the current message and recent history are replaced with server-generated T/S labels; the provider receives only those labels plus bounded task facts and relative deadline days. The chat text typed by the student is not automatically scrubbed of personal information, which is disclosed in the consent prompt. Server-generated T/S aliases remain stable across task and subject edits for the lifetime of the backend process; this alias cache is in memory only and is not written to Firestore. Responses are read-only and are not saved as conversations. The Assistant has a separate limit of 5 provider attempts per minute and 30 per day per student; provider failover counts as one request, and a limit response is HTTP 429. Without consent or when providers fail, the existing rule-based response is used. Chat responses use `Cache-Control: no-store`. The Progress insight remains rule-based unless its own optional AI flow is used.
 
 ### Plan My Time (Phase 4.3)
 

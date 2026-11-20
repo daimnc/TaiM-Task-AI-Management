@@ -193,8 +193,25 @@ PLANNER_ASSIST_RULES = {
     "aiConsent": (_bool, False, False),
 }
 
+def _chat_history(value):
+    if not isinstance(value, list) or len(value) > 6:
+        raise ValueError("must be a list of at most 6 recent messages.")
+    clean = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"role", "text"}:
+            raise ValueError("each history item must contain only role and text.")
+        if item["role"] not in ("user", "assistant"):
+            raise ValueError("history roles must be user or assistant.")
+        if not isinstance(item["text"], str) or not item["text"].strip() or len(item["text"]) > 1000:
+            raise ValueError("history text must contain 1 to 1000 characters.")
+        clean.append({"role": item["role"], "text": item["text"].strip()})
+    return clean
+
+
 CHAT_RULES = {
     "message": (_text(1000), True, None),
+    "aiConsent": (_bool, False, False),
+    "history": (_chat_history, False, []),
 }
 
 

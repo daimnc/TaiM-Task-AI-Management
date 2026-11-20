@@ -348,7 +348,19 @@ const SUBTASK_FORBIDDEN = { subtask_id: 'is set by the server.', status: 'is set
 const SETTINGS_RULES = { full_name: [rule.text(80), false], leadDays: [rule.oneOf(LEAD_DAYS), false], sessionMinutes: [rule.oneOf(SESSION_MINUTES), false] };
 const REMINDER_RULES = Object.fromEntries(Object.keys(REMINDER_DEFAULTS).map(k => [k, [rule.bool, false]]));
 const PLAN_RULES = { title: [rule.text(120), true], requirements: [rule.text(2000, true), false, ''], deadline: [rule.date, true], hoursPerDay: [rule.hours, false, 1], aiConsent: [rule.bool, false, false] };
-const CHAT_RULES = { message: [rule.text(1000), true] };
+const chatHistoryRule = v => {
+  if (!Array.isArray(v) || v.length > 6) throw new Error('must be a list of at most 6 recent messages.');
+  return v.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item) ||
+        Object.keys(item).sort().join(',') !== 'role,text' ||
+        !['user', 'assistant'].includes(item.role) ||
+        typeof item.text !== 'string' || !item.text.trim() || item.text.length > 1000) {
+      throw new Error('history items must contain a valid user/assistant role and 1 to 1000 characters of text.');
+    }
+    return { role: item.role, text: item.text.trim() };
+  });
+};
+const CHAT_RULES = { message: [rule.text(1000), true], aiConsent: [rule.bool, false, false], history: [chatHistoryRule, false, []] };
 
 function validateBody(body, rules, partial = false) {
   const clean = {}, errors = {};
@@ -544,11 +556,12 @@ export function mockV2Request(db, method, path, body, ctx = {}) {
     case 'POST /ai/planner-assist': validateBody(readObj(body), INSIGHTS_RULES); return mockPlannerAssist(); // same consent contract: only a real true/false is accepted
     case 'POST /ai/insights': validateBody(readObj(body), INSIGHTS_RULES); return mockInsights(); // same consent contract as the backend: only a real true/false is accepted
     case 'POST /ai/chat': {
-      const q = validateBody(readObj(body), CHAT_RULES).message.toLowerCase(), open = db.tasks.filter(t => t.status !== 'completed'); let reply;
+      const fields = validateBody(readObj(body), CHAT_RULES);
+      const q = fields.message.toLowerCase(), open = db.tasks.filter(t => t.status !== 'completed'); let reply;
       if (/first|priorit|start/.test(q)) { const t = topOpen(open); reply = t ? `Based on your recorded tasks, start with "${t.title}" (${t.progress_pct}% done, ${dueWords(dayNumber(t.deadline) - dayNumber(today))}). Try a 25-minute session.` : 'You have no open tasks.' }
       else if (/due|deadline|soon/.test(q)) reply = open.length ? 'Upcoming: ' + [...open].sort((a, b) => a.deadline.localeCompare(b.deadline)).slice(0, 3).map(t => `${t.title} (${shortDate(t.deadline)})`).join('; ') + '.' : 'Nothing is due.';
       else reply = 'I can help with prioritizing tasks and deadlines. Try asking "What should I work on first?"';
-      return { ...MOCK_LABEL, notice: 'Browser demo reply based on keywords and your recorded tasks. No AI model was used.', reply };
+      return { ...MOCK_LABEL, notice: 'Browser demo reply based on keywords and your recorded tasks. No provider request was made.', reply };
     }
     case 'POST /auth/login': { const b = readObj(body); if (!b.email || String(b.password || '').length < 6) throw new MockHttpError(401, 'Invalid email or password (demo: 6+ characters).'); return { token: 'mock-token', user: { ...db.user, email: String(b.email) } } }
     case 'POST /auth/register': {

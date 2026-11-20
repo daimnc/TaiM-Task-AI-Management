@@ -102,7 +102,7 @@ class AiTests(ApiTestCase):
     PLAN = {"title": "Research Paper", "requirements": "Intro and conclusion", "deadline": "2026-11-26",
             "hoursPerDay": "0.5"}
 
-    def test_plan_is_clearly_labelled_as_fallback_and_has_frontend_shape(self):
+    def test_plan_is_clearly_labelled_as_fallback_and_has_frontend_shape(self): 
         r = self.call("POST", "/api/ai/plan", json=self.PLAN)
         self.assertEqual(r.status_code, 200)
         body = r.get_json()
@@ -110,6 +110,7 @@ class AiTests(ApiTestCase):
         self.assertIs(body["aiGenerated"], False)
         self.assertEqual(body["source"], "deterministic-fallback")
         self.assertIn("No AI model was used", body["notice"])
+        self.assertIn("consent box was not ticked", body["notice"])
         self.assertEqual(len(body["subtasks"]), 5)
         for step in body["subtasks"]:
             self.assertEqual(set(step), {"title", "dueDate", "minutes"})
@@ -148,8 +149,9 @@ class AiTests(ApiTestCase):
         self.assertIn('"Urgent paper"', body["reply"])
         self.assertIn("20% done", body["reply"])
         self.assertNotIn("Bob", body["reply"])
-        self.assertEqual((body["mock"], body["aiGenerated"], body["source"]), (True, False, "deterministic-fallback"))
-        self.assertIn("No AI model was used", body["notice"])
+        self.assertEqual((body["mock"], body["aiGenerated"], body["source"]), (False, False, "rule-based"))
+        self.assertIn("AI was not used because consent was not given", body["notice"])
+        self.assertIn("rule-based assistant", body["notice"])
 
     def test_chat_ignores_completed_tasks_when_picking(self):
         done = self.add_task(title="Already done", importance="high")

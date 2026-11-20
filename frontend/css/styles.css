@@ -119,6 +119,25 @@ tr.subs td{padding:0 8px 12px 28px;background:#fafaff}.subnote{font-size:12px;co
 .pa-min{display:inline-block;min-width:58px;font-weight:600;color:var(--pur)}
 .pa-order{margin:0;padding-left:20px;line-height:1.7;font-size:13px}.pa-order li{margin-bottom:6px}
 
+
+/* Phase 4.4 — AI Assistant */
+.assistant-card{display:flex;flex-direction:column;gap:14px}
+.assistant-top,.assistant-meta{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.assistant-top p{margin:7px 0 0}
+.assistant-prompts{display:flex;flex-wrap:wrap;gap:8px}
+.assistant-prompt{font-size:.82rem;padding:7px 10px}
+.assistant-chat{min-height:230px;max-height:430px;overflow:auto;display:flex;flex-direction:column;gap:10px}
+.assistant-chat .msg{max-width:88%;white-space:pre-wrap;overflow-wrap:anywhere}
+.assistant-chatbar{display:flex;gap:8px}
+.assistant-chatbar input{min-width:0;flex:1}
+.assistant-consent{display:flex;align-items:flex-start;gap:10px;padding:12px;border:1px solid var(--line);border-radius:12px;font-size:.9rem}
+.assistant-consent input{margin-top:4px;flex:0 0 auto}
+.assistant-consent span{display:grid;gap:5px}
+.assistant-consent small{color:var(--mut);line-height:1.5}
+.assistant-notice{margin:0;line-height:1.5}
+@media(max-width:600px){.assistant-top{align-items:flex-start}.assistant-chat .msg{max-width:96%}.assistant-chatbar{flex-wrap:wrap}.assistant-chatbar input{flex-basis:100%}}
+
+
 /* Phase 4.2: AI Insights card (Progress page) */
 #ins{margin-bottom:18px}.ins-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}.ins-head h3{margin:0}
 .ins-out{margin-top:16px;min-width:0}.ins-result{display:flex;flex-direction:column;gap:14px}
@@ -133,3 +152,4 @@ tr.subs td{padding:0 8px 12px 28px;background:#fafaff}.subnote{font-size:12px;co
 .facts{margin:0;display:grid;gap:2px}.facts>div{display:flex;justify-content:space-between;gap:16px;padding:4px 0;border-bottom:1px dashed var(--line);font-size:13px}.facts>div:last-child{border-bottom:0}
 .facts dt{color:var(--mut);min-width:0}.facts dd{margin:0;text-align:right;font-weight:600;min-width:0}
 @media(max-width:700px){.facts>div{flex-direction:column;gap:0}.facts dd{text-align:left}}
+
