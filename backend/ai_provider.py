@@ -236,6 +236,12 @@ class ProviderResult:
         self.source = source
 
 
+# Confirmed Gemini 3.8 Flash model ID supporting `thinkingConfig.thinkingLevel` ("low", "medium", "high"; "minimal" errors).
+_GEMINI_LOW_THINKING_LEVEL_MODELS = frozenset({
+    "gemini-3.8-flash",
+})
+
+
 class GeminiProvider:
     def __init__(self, api_key, model, timeout):
         if not api_key or not isinstance(model, str) or not _MODEL_RE.match(model):
@@ -298,10 +304,13 @@ class GeminiProvider:
 
     def generate_json(self, system_prompt, user_text, timeout=None, max_tokens=1500):
         """Phase 4.2: one JSON-only completion. Returns the model's raw TEXT (untrusted; the caller parses and checks it)."""
+        generation_config = {"temperature": 0.2, "maxOutputTokens": max_tokens, "responseMimeType": "application/json"}
+        if self.model.strip().lower() in _GEMINI_LOW_THINKING_LEVEL_MODELS:
+            generation_config["thinkingConfig"] = {"thinkingLevel": "low"}
         body = {
             "systemInstruction": {"parts": [{"text": system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": user_text}]}],
-            "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens, "responseMimeType": "application/json"},
+            "generationConfig": generation_config,
         }
         request = urllib.request.Request(
             f"{API_BASE}{self.model}:generateContent", data=json.dumps(body).encode("utf-8"), method="POST",

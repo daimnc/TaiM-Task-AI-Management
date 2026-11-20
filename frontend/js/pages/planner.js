@@ -1,5 +1,6 @@
 import {api} from '../api/client.js';
 import {$,load,guard,esc,fmtDate,toast,today,iso,isCompleted,sortByDue} from '../ui.js';
+import {ASSIST_CARD,wireAssist} from '../components/plannerAssist.js';
 import {MAX_SUBTASKS,MAX_STEP_TITLE,MAX_EDITOR_ROWS,subtaskCounts,subtaskCapacity,planStepsToSubtasks,addingReopens,rowsFromPlan,moveRow,removeRow,addRow,selectedIndexes,validateRows,rowsAsSteps,planSource} from '../taskStats.js';
 // The planner only generates subtasks and appends them to an EXISTING parent task. It never creates tasks.
 // Step dates from the plan are not shown or saved: subtasks have no date field.
@@ -29,7 +30,7 @@ export default{title:'AI Task Planner',render(el,q){
     <small class="hint" id="consentInfo">Groq is tried first. If it fails or returns unusable steps, Google Gemini may also receive the same task details. If neither provider is configured or available, a built-in template is shown. Only the task title, requirements, deadline and available hours per day are sent. Nothing is sent until you tick this box, and you need to tick it again for each new plan.</small>
     <p class="err" id="consentErr" role="alert" hidden></p></div>
    <button class="btn primary" id="gen">✦ Generate breakdown</button></form>
-   <div class="card"><h3>Current subtasks</h3><div id="cur"></div><h3 style="margin-top:18px">Suggested subtasks</h3><div id="out" class="note">${HINT}</div></div></div>`;
+   <div class="card"><h3>Current subtasks</h3><div id="cur"></div><h3 style="margin-top:18px">Suggested subtasks</h3><div id="out" class="note">${HINT}</div></div></div>${ASSIST_CARD}`;
   const f=$('#f',el),out=$('#out',el),cur=$('#cur',el),grid=$('#grid',el),E=f.elements,parent=()=>tasks.find(t=>t.task_id===E.task_id.value),consentErr=$('#consentErr',el);
   const drawCur=()=>{const p=parent(),s=Array.isArray(p.subtasks)?p.subtasks:[],c=subtaskCounts(p);
    cur.innerHTML=(c.total?`<p class="hint">${c.done} of ${c.total} done · ${c.total} of ${MAX_SUBTASKS} used</p><ul class="sublist">${s.map(x=>`<li class="${x.status==='completed'?'done':''}"><span class="mark" aria-hidden="true">${x.status==='completed'?'✓':'○'}</span><span class="st-title">${esc(x.title)}</span><small>~${esc(x.estimated_minutes)} min</small></li>`).join('')}</ul>`:`<p class="hint">No subtasks yet · 0 of ${MAX_SUBTASKS} used</p>`)
@@ -87,4 +88,4 @@ export default{title:'AI Task Planner',render(el,q){
     toast(`${items.length} subtask${items.length===1?'':'s'} added`)}
    catch(x){toast(x.message,'bad')}},grid); // on failure nothing was saved (all or nothing) and the edited steps stay for a retry
   f.onsubmit=e=>{e.preventDefault();gen()};
-  drawCur()})}};
+  drawCur();wireAssist(el)})}};

@@ -431,6 +431,24 @@ const MOCK_INSIGHTS = {
 };
 export const mockInsights = () => structuredClone(MOCK_INSIGHTS);
 
+// Phase 4.3 demo sample. Fixed sample data (not calculated from the student's tasks); labelled mock:true so the page says so.
+const SAMPLE_TASKS = [
+  { taskId: 'demo1', title: 'Sample task: Research paper', subjectName: 'Sample subject', deadline: '2026-11-03', daysUntil: 2, importance: 'high', status: 'in_progress', progressPct: 30, remainingMinutes: 150, estimateSource: 'subtasks', estimateLabel: 'Estimate from your unfinished subtasks', rank: 1, scheduled: true, plannedMinutes: 150, unallocatedMinutes: 0, reasons: ['Due in 2 days', 'High importance', 'Already started (30% done)'] },
+  { taskId: 'demo2', title: 'Sample task: Quiz review', subjectName: 'Sample subject', deadline: '2026-11-05', daysUntil: 4, importance: 'medium', status: 'not_started', progressPct: 0, remainingMinutes: 45, estimateSource: 'provisional', estimateLabel: 'Provisional estimate, not a measurement of the work left', rank: 2, scheduled: true, plannedMinutes: 45, unallocatedMinutes: 0, reasons: ['Due in 4 days', 'Provisional time estimate'] },
+];
+const SAMPLE_DAYS = [['2026-11-01', 0, [['demo1', 90]]], ['2026-11-02', 1, [['demo1', 60], ['demo2', 45]]], ['2026-11-03', 2, []]].map(([date, dayOffset, items]) => ({
+  date, dayOffset, capacityMinutes: 120, allocatedMinutes: items.reduce((a, i) => a + i[1], 0), remainingCapacityMinutes: 120 - items.reduce((a, i) => a + i[1], 0), overloaded: false,
+  items: items.map(([id, minutes]) => { const t = SAMPLE_TASKS.find(x => x.taskId === id); return { taskId: id, title: t.title, subjectName: t.subjectName, minutes, estimateSource: t.estimateSource, deadline: t.deadline, importance: t.importance, overdue: false } }) }));
+const MOCK_PLANNER_ASSIST = {
+  mock: true, aiGenerated: false, source: 'mock-sample', notice: 'Browser demo sample. It is not calculated from your tasks and no AI model was used.', asOf: '2026-11-01',
+  summary: 'Sample: start with the research paper, then the quiz review. All sample work fits in the time set aside.', tips: [{ focus: 'estimates', text: 'Sample tip: adding subtasks with minutes makes estimates more reliable.' }],
+  capacity: { hoursPerDay: 2, dailyMinutes: 120, horizonDays: 3, totalAvailableMinutes: 360, totalNeededMinutes: 195, allocatedMinutes: 195, unallocatedMinutes: 0 },
+  nextTask: SAMPLE_TASKS[0], prioritizedTasks: SAMPLE_TASKS, schedule: SAMPLE_DAYS,
+  warnings: { overdueCount: 0, overloaded: false, overloadedDays: [], deficitMinutes: 0, atRiskTasks: [], unscheduledTasks: [] },
+  limitations: ['Demo sample only: nothing here comes from your own tasks.'],
+};
+export const mockPlannerAssist = () => structuredClone(MOCK_PLANNER_ASSIST);
+
 export function mockV2Request(db, method, path, body, ctx = {}) {
   const today = ctx.todayIso || new Date().toISOString().slice(0, 10);
   const sm = path.match(/^\/tasks\/([^/]+)\/subtasks(?:\/([^/]+)(?:\/(complete|reopen))?)?$/);
@@ -523,6 +541,7 @@ export function mockV2Request(db, method, path, body, ctx = {}) {
       const notice = 'Browser demo plan: a fixed five-step template. No AI model was used.' + (f.aiConsent === true ? '' : ' AI suggestions were not used because the consent box was not ticked.');
       return { ...MOCK_LABEL, notice, subtasks: steps.map((title, i) => ({ title, dueDate: addDaysIso(today, Math.round(span * (i + 1) / steps.length)), minutes })) };
     }
+    case 'POST /ai/planner-assist': validateBody(readObj(body), INSIGHTS_RULES); return mockPlannerAssist(); // same consent contract: only a real true/false is accepted
     case 'POST /ai/insights': validateBody(readObj(body), INSIGHTS_RULES); return mockInsights(); // same consent contract as the backend: only a real true/false is accepted
     case 'POST /ai/chat': {
       const q = validateBody(readObj(body), CHAT_RULES).message.toLowerCase(), open = db.tasks.filter(t => t.status !== 'completed'); let reply;

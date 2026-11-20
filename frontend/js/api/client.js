@@ -1,6 +1,6 @@
 // ALL data access goes through `api`. UI never calls fetch or touches mock data directly.
 import { CONFIG } from '../config.js';
-import { seed, KEYS, bootstrapMockV2, mockV2Request, mockInsights, MockHttpError } from './mockData.js';
+import { seed, KEYS, bootstrapMockV2, mockV2Request, mockInsights, mockPlannerAssist, MockHttpError } from './mockData.js';
 import { iso, addDays, daysUntil, dueText, fmtDate, topPick, sortByDue, today } from '../ui.js';
 export class ApiError extends Error { constructor(m, status) { super(m); this.status = status } }
 // ---- Firebase (real mode only; never loaded when USE_MOCK is true) ----
@@ -73,6 +73,7 @@ async function mock(method, path, body) {
       return { mock: true, subtasks: steps.map((title, i) => ({ title, dueDate: iso(addDays(Math.round(span * (i + 1) / n))), minutes: mins })) }
     }
     case 'POST /ai/insights': return mockInsights();
+    case 'POST /ai/planner-assist': return mockPlannerAssist();
     case 'POST /ai/chat': {
       const q = (body.message || '').toLowerCase(); let reply; const open = d.tasks.filter(t => t.progress < 100);
       if (/first|priorit|start/.test(q)) { const t = topPick(d.tasks); reply = t ? `Based on your recorded tasks, start with "${t.title}" (${t.progress}% done, ${dueText(t.deadline).toLowerCase()}). Try a 25-minute session.` : 'You have no open tasks.' }
@@ -133,6 +134,7 @@ export const api = {
   getReminderPrefs: () => req('GET', '/reminders/preferences'), saveReminderPrefs: b => req('PUT', '/reminders/preferences', b),
   planTask: b => req('POST', '/ai/plan', b), askAssistant: b => req('POST', '/ai/chat', b),
   getInsights: b => req('POST', '/ai/insights', b), // Phase 4.2: body is {aiConsent: true|false}; answers rule-based text unless consent was given and AI is available
+  getPlannerAssist: b => req('POST', '/ai/planner-assist', b), // Phase 4.3: body is {hoursPerDay, horizonDays, aiConsent}; read-only, rule-based unless consent was given and AI is available
   // Phase 1 API (subjects, task actions). With the legacy mock they answer 404.
   getSubjects: () => req('GET', '/subjects'), createSubject: b => req('POST', '/subjects', b),
   renameSubject: (id, b) => req('PATCH', '/subjects/' + encodeURIComponent(id), b), deleteSubject: id => req('DELETE', '/subjects/' + encodeURIComponent(id)),

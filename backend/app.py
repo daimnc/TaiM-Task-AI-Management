@@ -42,6 +42,7 @@ def create_app(db=None, token_verifier=None, enable_v2=None, ai_provider=_FROM_C
     app.extensions["taim_ai"] = provider_from_config(Config) if ai_provider is _FROM_CONFIG else ai_provider
     app.extensions["taim_ai_limiter"] = RateLimiter(Config.AI_RATE_PER_MINUTE, Config.AI_RATE_PER_DAY)
     app.extensions["taim_insights_limiter"] = RateLimiter(Config.INSIGHTS_RATE_PER_MINUTE, Config.INSIGHTS_RATE_PER_DAY)
+    app.extensions["taim_planner_limiter"] = RateLimiter(Config.PLANNER_ASSIST_RATE_PER_MINUTE, Config.PLANNER_ASSIST_RATE_PER_DAY)
 
     register_error_handlers(app)
 

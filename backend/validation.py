@@ -180,6 +180,19 @@ INSIGHTS_RULES = {
     "aiConsent": (_bool, False, False),
 }
 
+def _horizon_days(value):
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 14:
+        raise ValueError("must be a whole number of days from 1 to 14.")
+    return value
+
+
+# Phase 4.3 Planner Assistance. aiConsent: only a real true sends anonymised numbers and labels to Groq / Google Gemini.
+PLANNER_ASSIST_RULES = {
+    "hoursPerDay": (_hours_per_day, False, 2.0),
+    "horizonDays": (_horizon_days, False, 7),
+    "aiConsent": (_bool, False, False),
+}
+
 CHAT_RULES = {
     "message": (_text(1000), True, None),
 }

@@ -109,6 +109,16 @@ tr.subs td{padding:0 8px 12px 28px;background:#fafaff}.subnote{font-size:12px;co
 .srow .err{grid-column:1 / -1;margin:0}.srow input[aria-invalid="true"]{border-color:#c0392b}
 #more{margin-top:10px}
 
+/* Phase 4.3: Plan my time (Planner Assistance) */
+#pa{margin-top:18px}
+.pa-next h4{margin:4px 0 2px;font-size:16px}.pa-next p{margin:4px 0}
+.pa-list{margin:6px 0 0;padding-left:18px;line-height:1.6;font-size:13px}.warnbox .pa-list{margin-top:4px}
+.pa-day{border-top:1px solid var(--line);padding:10px 0}.pa-day:first-of-type{border-top:0}.pa-dayhead{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:13px}
+.pa-day.over .pa-dayhead small{color:#a05a00;font-weight:600}
+.pa-bar{height:8px;background:#eef0f6;border-radius:99px;overflow:hidden;margin:6px 0}.pa-bar i{display:block;height:100%;background:linear-gradient(90deg,#7b6cf6,#9d8cff);border-radius:99px}.pa-day.over .pa-bar i{background:#d98a2b}
+.pa-min{display:inline-block;min-width:58px;font-weight:600;color:var(--pur)}
+.pa-order{margin:0;padding-left:20px;line-height:1.7;font-size:13px}.pa-order li{margin-bottom:6px}
+
 /* Phase 4.2: AI Insights card (Progress page) */
 #ins{margin-bottom:18px}.ins-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}.ins-head h3{margin:0}
 .ins-out{margin-top:16px;min-width:0}.ins-result{display:flex;flex-direction:column;gap:14px}

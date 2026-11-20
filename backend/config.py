@@ -61,3 +61,7 @@ class Config:
     # Phase 4.2 AI Insights: its own limiter, separate from the planner's. Counts only real provider requests.
     INSIGHTS_RATE_PER_MINUTE = 2
     INSIGHTS_RATE_PER_DAY = 10
+
+    # Phase 4.3 Planner Assistance: its own limiter, separate from the planner's and insights'. Counts only real provider requests.
+    PLANNER_ASSIST_RATE_PER_MINUTE = 2
+    PLANNER_ASSIST_RATE_PER_DAY = 10
